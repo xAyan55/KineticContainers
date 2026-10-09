@@ -207,7 +207,8 @@ if [ ! -f "server/package.json" ] || [ ! -f "frontend/package.json" ]; then
   [ -n "${SERVICE:-}" ] && set -- "$@" --service="$SERVICE"
   [ "$NO_SERVICE" -eq 1 ] && set -- "$@" --no-service
   [ "$SYS_DEPS" -eq 0 ] && set -- "$@" --no-system-deps
-  [ "$START_NOW" -eq 1 ] && set -- "$@" --start
+  # Run from inside the fresh checkout, otherwise the check above fails again.
+  cd "$INSTALL_DIR" || die "Cannot enter install directory: $INSTALL_DIR"
   exec bash "$INSTALL_DIR/install.sh" "$@"
 fi
 
