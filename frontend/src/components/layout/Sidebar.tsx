@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Network,
   Plus,
   Server,
   Settings,
@@ -33,6 +34,7 @@ const ACCOUNT_NAV: NavEntry[] = [{ to: "/profile", end: true, label: "Profile", 
 
 const ADMIN_NAV: NavEntry[] = [
   { to: "/admin", end: true, label: "Overview", Icon: Gauge },
+  { to: "/admin/nodes", end: true, label: "Nodes", Icon: Network },
   { to: "/admin/users", label: "Users", Icon: Users },
   { to: "/admin/create", end: true, label: "Create VPS", Icon: Plus },
   { to: "/admin/settings", end: true, label: "Settings", Icon: Settings },

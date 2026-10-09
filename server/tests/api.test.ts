@@ -109,4 +109,121 @@ describe("KineticCT API", () => {
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe("NODE_NOT_FOUND");
   });
+
+  it("auto-registers the Local Node on a fresh database", async () => {
+    const db = (await import("../src/db.js")).getDb();
+    const rows = db.prepare("SELECT * FROM nodes WHERE id = 'local'").all() as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("Local Node");
+    expect(rows[0].endpoint).toBe("local");
+    expect(rows[0].node_type).toBe("local");
+    expect(rows[0].provider).toBe("local-lxc");
+    expect(Number(rows[0].is_protected)).toBe(1);
+    const version = (db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number }).v;
+    expect(version).toBeGreaterThanOrEqual(2);
+  });
+
+  it("never duplicates or overwrites the Local Node on re-initialization", async () => {
+    const mod = await import("../src/db.js");
+    const db = mod.getDb();
+    db.prepare("UPDATE nodes SET name = ? WHERE id = 'local'").run("My Custom Host");
+    mod.ensureLocalNode(db);
+    mod.ensureLocalNode(db);
+    const rows = db.prepare("SELECT * FROM nodes WHERE id = 'local' OR endpoint = 'local'").all() as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].name).toBe("My Custom Host");
+  });
+
+  it("enforces admin-only access on node endpoints", async () => {
+    const userAgent = request.agent(app);
+    await userAgent.post("/api/auth/login").send({ email: "user@test.local", password: "UserPass12345" });
+    expect((await userAgent.get("/api/nodes/local")).status).toBe(403);
+    expect((await userAgent.post("/api/nodes/local/check")).status).toBe(403);
+    expect((await userAgent.get("/api/nodes/local/containers")).status).toBe(403);
+    expect((await userAgent.patch("/api/nodes/local").send({ name: "x" })).status).toBe(403);
+    expect((await userAgent.delete("/api/nodes/local")).status).toBe(403);
+    expect((await request(app).get("/api/nodes")).status).toBe(401);
+  });
+
+  it("refuses to delete the protected Local Node", async () => {
+    const agent = request.agent(app);
+    await agent.post("/api/auth/login").send({ email: "admin@test.local", password: "AdminPass12345" });
+    const res = await agent.delete("/api/nodes/local");
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("NODE_PROTECTED");
+    const list = await agent.get("/api/nodes");
+    expect(list.body.data.nodes.some((n: { id: string }) => n.id === "local")).toBe(true);
+  });
+
+  it("allows renaming the Local Node but never changing its identity", async () => {
+    const agent = request.agent(app);
+    await agent.post("/api/auth/login").send({ email: "admin@test.local", password: "AdminPass12345" });
+    const res = await agent.patch("/api/nodes/local").send({ name: "Renamed Host", endpoint: "remote", node_type: "remote" });
+    expect(res.status).toBe(200);
+    expect(res.body.data.node.name).toBe("Renamed Host");
+    const fresh = await agent.get("/api/nodes/local");
+    expect(fresh.body.data.node.endpoint).toBe("local");
+    expect(fresh.body.data.node.node_type).toBe("local");
+    expect(fresh.body.data.node.api_token).toBeUndefined();
+  });
+
+  it("rejects a second local node registration", async () => {
+    const agent = request.agent(app);
+    await agent.post("/api/auth/login").send({ email: "admin@test.local", password: "AdminPass12345" });
+    const res = await agent.post("/api/nodes").send({ name: "Another", connection: "local" });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("LOCAL_NODE_EXISTS");
+  });
+
+  it("treats remote nodes honestly: saved as config, never operable", async () => {
+    const agent = request.agent(app);
+    await agent.post("/api/auth/login").send({ email: "admin@test.local", password: "AdminPass12345" });
+    const created = await agent.post("/api/nodes").send({ name: "Far Away", connection: "remote", host_address: "192.0.2.10" });
+    expect(created.status).toBe(201);
+    expect(created.body.data.node.status).toBe("unconfigured");
+    expect(created.body.data.node.api_token).toBeUndefined();
+    const id = created.body.data.node.id as string;
+    const dup = await agent.post("/api/nodes").send({ name: "Dupe", connection: "remote", host_address: "192.0.2.10" });
+    expect(dup.status).toBe(409);
+    const check = await agent.post(`/api/nodes/${id}/check`);
+    expect(check.status).toBe(409);
+    expect(check.body.error.code).toBe("REMOTE_NODE_UNSUPPORTED");
+    const inv = await agent.get(`/api/nodes/${id}/containers`);
+    expect(inv.status).toBe(409);
+    const removed = await agent.delete(`/api/nodes/${id}`);
+    expect(removed.status).toBe(200);
+  });
+
+  it("reports real local health without fabricating success", async () => {
+    const agent = request.agent(app);
+    await agent.post("/api/auth/login").send({ email: "admin@test.local", password: "AdminPass12345" });
+    const res = await agent.post("/api/nodes/local/check");
+    expect(res.status).toBe(200);
+    expect(["online", "unconfigured", "error"]).toContain(res.body.data.check.status);
+    expect(typeof res.body.data.check.detail).toBe("string");
+  });
+
+  it("merges duplicate local rows on upgrade without losing instances", async () => {
+    const mod = await import("../src/db.js");
+    const db = mod.getDb();
+    const owner = await makeUser(db, { email: "dup@test.local", password: "DupPass12345" });
+    const now = nowIso();
+    // Simulate a pre-v2 database: no uniqueness guard, two local rows.
+    db.exec("DROP INDEX IF EXISTS idx_nodes_local_single");
+    db.prepare(
+      "INSERT INTO nodes (id, name, endpoint, api_token, status, created_at, updated_at) VALUES (?, ?, 'local', '', 'unknown', ?, ?)"
+    ).run("node_dup", "Duplicate", now, now);
+    const instId = newId("vps");
+    db.prepare(
+      "INSERT INTO instances (id, name, container_id, node_id, owner_id, status, cpu, memory_mb, storage_gb, created_at, updated_at) VALUES (?, 'd', 'dup-box', 'node_dup', ?, 'stopped', 1, 512, 10, ?, ?)"
+    ).run(instId, owner, now, now);
+    // Simulate a pre-v2 database, then upgrade.
+    db.prepare("DELETE FROM schema_migrations WHERE version = 2").run();
+    mod.migrate(db);
+    const locals = db.prepare("SELECT id FROM nodes WHERE endpoint = 'local'").all() as { id: string }[];
+    expect(locals).toHaveLength(1);
+    expect(locals[0].id).toBe("local");
+    const inst = db.prepare("SELECT node_id FROM instances WHERE id = ?").get(instId) as { node_id: string };
+    expect(inst.node_id).toBe("local");
+  });
 });

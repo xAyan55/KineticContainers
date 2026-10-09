@@ -78,6 +78,15 @@ Runtime settings (persisted in SQLite, editable at `/admin/settings`): applicati
 - Remote nodes: an endpoint other than `local` is accepted for inventory but operations return `REMOTE_NODE_UNSUPPORTED` until a real encrypted agent exists.
 - No node registered: provider is `unconfigured`; Overview shows “No virtualization node configured”, Create is unavailable, instance actions return `409` with an honest message.
 
+## Node management
+
+The admin **Nodes** page (`/admin/nodes`) manages the hosts that run LXC containers.
+
+- **Local Node:** on first boot (and every boot, idempotently) the backend registers its own host as node id `local` named "Local Node" (migration v2 + boot-time `ensureLocalNode`). It can be renamed but never converted to a remote node or deleted. Duplicate local rows from older databases are merged on upgrade without touching instances.
+- **Health checks:** opening node details (or Refresh) runs a live check — LXC tooling presence, inventory readability, host resources (hostname, OS, kernel, arch, memory, CPU sample, root filesystem, container counts) — and persists status (`online` / `unconfigured` / `unavailable` / `error` / `offline`), last-check time, and last-known-good inventory. Metrics that cannot be collected show as `Unavailable`, never invented.
+- **Host dependencies:** `lxc-ls` (and friends) must be on `PATH` and executable by the backend user (typically root for container operations). Missing tooling reports `Unconfigured` with an explanation; permission problems report `Error`.
+- **Remote nodes:** can be saved as configuration records (name + host address) but stay `Unconfigured` — connectivity checks and inventory honestly return `REMOTE_NODE_UNSUPPORTED` until a secure remote agent is implemented. Removing a registration never touches host containers; nodes with managed instances cannot be removed until reassigned.
+
 ## Security model
 
 - Argon2id password hashing; sessions are random 256-bit tokens stored as SHA-256 hashes, HTTP-only `SameSite=Lax` cookies (`Secure` in production).

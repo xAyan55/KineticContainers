@@ -39,12 +39,16 @@ Instance fields: `id, name, container_id, node_id, node_name, status, cpu, memor
 
 ## Nodes (admin)
 
-Node list responses never include stored tokens.
+Node list responses never include stored tokens. The `local` node (the panel's own host) is auto-registered, protected from deletion, and limited to display-name edits.
 
-- `GET /api/nodes` → `{ nodes: [{ id, name, endpoint, status, ... }], provider }`.
-- `POST /api/nodes` `{ name, endpoint, api_token? }` → `201 { node }`. Use `endpoint: "local"` for the host agent.
+- `GET /api/nodes` → `{ nodes: [{ id, name, endpoint, node_type, provider, host_address, status, last_check_at, last_check_ok, last_error, is_protected, capabilities, managed_containers, ... }], provider }`.
+- `GET /api/nodes/:id` → `{ node }` including `managed_containers`.
+- `POST /api/nodes` `{ name, connection: "local"|"remote", host_address?, api_token? }` → `201 { node }`. A second `local` connection returns `409 LOCAL_NODE_EXISTS`; duplicate remote hosts return `409 NODE_EXISTS`. Remote records are saved as `unconfigured` configuration only.
+- `PATCH /api/nodes/:id` `{ name }` → `{ node }`. Only the display name is editable; identity fields are immutable.
+- `POST /api/nodes/:id/check` → `200 { check: { status, ok, detail, checks, host, containersTotal, ... } }`. Remote nodes return `409 REMOTE_NODE_UNSUPPORTED`. Missing LXC reports `unconfigured`, never fake success.
+- `GET /api/nodes/:id/containers` → `{ nodeId, checkedAt, containers: [{ ..., managed, owner }] }`. Host-only containers are `managed: false` with `owner: null`. Remote nodes return `409`.
 - `POST /api/nodes/:id/test` → `{ status }` live check, or `502 NODE_UNREACHABLE`.
-- `DELETE /api/nodes/:id` → `{ ok: true }`, or `409 NODE_IN_USE`.
+- `DELETE /api/nodes/:id` → `{ ok: true }`, `403 NODE_PROTECTED` for the Local Node, or `409 NODE_IN_USE`.
 
 ## Admin
 

@@ -1,63 +1,14 @@
-import { execFile } from "node:child_process";
 import type {
   ContainerInfo,
-  ContainerStatus,
   CreateContainerRequest,
   NodeStatus,
   VirtualizationProvider,
 } from "./provider.js";
 import { ProviderError } from "./provider.js";
+import { parseLxcLs, runLxc } from "./host.js";
 import { getDb } from "../../db.js";
 
-const TIMEOUT_MS = 15000;
-const MAX_OUTPUT = 64 * 1024;
-
-function run(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      cmd,
-      args,
-      { timeout: TIMEOUT_MS, maxBuffer: MAX_OUTPUT, windowsHide: true },
-      (err, stdout, stderr) => {
-        if (err) {
-          const e = err as NodeJS.ErrnoException & { killed?: boolean; code?: unknown };
-          if ((e as { code?: string }).code === "ENOENT") {
-            reject(new ProviderError("LXC_UNAVAILABLE", "LXC tools are not installed on this host."));
-            return;
-          }
-          reject(
-            new ProviderError(
-              "LXC_COMMAND_FAILED",
-              `Host command failed: ${cmd} ${(args[0] ?? "").slice(0, 32)}`
-            )
-          );
-          return;
-        }
-        resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
-      }
-    );
-  });
-}
-
-function parseLxcLs(output: string): ContainerInfo[] {
-  // `lxc-ls -f --format csv`-ish output varies by distro; parse defensively.
-  const lines = output.split("\n").map((l) => l.trim()).filter(Boolean);
-  const out: ContainerInfo[] = [];
-  for (const line of lines) {
-    const parts = line.split(/[\s,]+/);
-    if (parts.length === 0) continue;
-    const name = (parts[0] ?? "").trim();
-    if (!name || name.toUpperCase() === "NAME") continue;
-    const rawState = (parts[1] ?? "").toLowerCase();
-    let status: ContainerStatus = "unknown";
-    if (rawState.includes("run")) status = "running";
-    else if (rawState.includes("stop")) status = "stopped";
-    else if (rawState.includes("frozen")) status = "stopped";
-    const ipv4 = parts.find((p) => /^\d+\.\d+\.\d+\.\d+$/.test(p));
-    out.push({ containerId: name, name, status, ipv4 });
-  }
-  return out;
-}
+const run = runLxc;
 
 function validateContainerId(id: string): void {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}$/.test(id)) {

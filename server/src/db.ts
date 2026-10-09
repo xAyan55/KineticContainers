@@ -17,7 +17,9 @@ export interface UserRow {
   updated_at: string;
 }
 
-const MIGRATIONS: { version: number; sql: string }[] = [
+type Migration = { version: number; sql: string } | { version: number; run: (db: Database.Database) => void };
+
+const MIGRATIONS: Migration[] = [
   {
     version: 1,
     sql: `
@@ -91,6 +93,49 @@ const MIGRATIONS: { version: number; sql: string }[] = [
     CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_events(created_at);
     `,
   },
+  {
+    // Node management: richer node records + automatic Local Node.
+    // Implemented as code (not pure SQL) so upgrades stay safe on
+    // databases with unexpected pre-existing state: columns are added
+    // only when missing, duplicate local rows are merged (instances are
+    // repointed, never deleted), and seeding never touches existing rows.
+    version: 2,
+    run: (db: Database.Database) => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(nodes)").all() as { name: string }[]).map((r) => r.name)
+      );
+      const addColumn = (ddl: string, name: string): void => {
+        if (!cols.has(name)) db.exec(`ALTER TABLE nodes ADD COLUMN ${ddl}`);
+      };
+      addColumn("node_type TEXT NOT NULL DEFAULT 'remote'", "node_type");
+      addColumn("provider TEXT NOT NULL DEFAULT 'local-lxc'", "provider");
+      addColumn("host_address TEXT", "host_address");
+      addColumn("last_check_at TEXT", "last_check_at");
+      addColumn("last_check_ok INTEGER", "last_check_ok");
+      addColumn("last_error TEXT", "last_error");
+      addColumn("is_protected INTEGER NOT NULL DEFAULT 0", "is_protected");
+
+      // Merge duplicate local-endpoint rows (possible on DBs predating the
+      // uniqueness guard): keep the earliest, repoint its instances, drop
+      // the rest. Instances are preserved; only redundant node rows go.
+      const locals = db
+        .prepare("SELECT id FROM nodes WHERE endpoint = 'local' ORDER BY created_at ASC, id ASC")
+        .all() as { id: string }[];
+      if (locals.length > 1) {
+        const keep = locals[0].id;
+        const merge = db.transaction(() => {
+          db.prepare(
+            "UPDATE instances SET node_id = ? WHERE node_id IN (SELECT id FROM nodes WHERE endpoint = 'local' AND id != ?)"
+          ).run(keep, keep);
+          db.prepare("DELETE FROM nodes WHERE endpoint = 'local' AND id != ?").run(keep);
+        });
+        merge();
+      }
+
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_local_single ON nodes(endpoint) WHERE endpoint = 'local'");
+      ensureLocalNode(db);
+    },
+  },
 ];
 
 const DEFAULT_SETTINGS: Record<string, string> = {
@@ -146,7 +191,11 @@ export function migrate(db: Database.Database): void {
   for (const m of MIGRATIONS) {
     if (applied.has(m.version)) continue;
     const txn = db.transaction(() => {
-      db.exec(m.sql);
+      if ("sql" in m) {
+        db.exec(m.sql);
+      } else {
+        m.run(db);
+      }
       db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(
         m.version,
         new Date().toISOString()
@@ -165,6 +214,23 @@ function seedDefaults(db: Database.Database): void {
     for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) insert.run(k, v, now);
   });
   txn();
+  ensureLocalNode(db);
+}
+
+/**
+ * Idempotent boot-time guarantee: the host running the KineticCT backend is
+ * always registered as the `local` node. Never touches an existing row, so
+ * custom names, other nodes, containers, and settings are preserved, and
+ * restarts can never create duplicates (fixed id + WHERE NOT EXISTS +
+ * partial unique index as backstops).
+ */
+export function ensureLocalNode(db: Database.Database): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO nodes (id, name, endpoint, api_token, status, node_type, provider, is_protected, created_at, updated_at)
+     SELECT 'local', 'Local Node', 'local', '', 'unknown', 'local', 'local-lxc', 1, ?, ?
+     WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE id = 'local' OR endpoint = 'local')`
+  ).run(now, now);
 }
 
 export function nowIso(): string {

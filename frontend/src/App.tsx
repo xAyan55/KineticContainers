@@ -7,6 +7,7 @@ import { RegisterPage } from "@/pages/Register";
 import { DashboardPage } from "@/pages/Dashboard";
 import { ProfilePage } from "@/pages/Profile";
 import { AdminOverviewPage } from "@/pages/admin/Overview";
+import { AdminNodesPage } from "@/pages/admin/Nodes";
 import { AdminUsersPage } from "@/pages/admin/Users";
 import { AdminUserDetailPage } from "@/pages/admin/UserDetail";
 import { AdminCreatePage } from "@/pages/admin/Create";
@@ -58,6 +59,16 @@ export function App(): React.JSX.Element {
               <RequireAdmin>
                 <AppShell appName={appName}>
                   <AdminOverviewPage />
+                </AppShell>
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/nodes"
+            element={
+              <RequireAdmin>
+                <AppShell appName={appName}>
+                  <AdminNodesPage />
                 </AppShell>
               </RequireAdmin>
             }

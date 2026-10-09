@@ -53,6 +53,9 @@ const STATUS_STYLES: Record<string, string> = {
   disabled: "border-border bg-surface text-muted",
   online: "border-highlight bg-raised text-primary",
   offline: "border-border bg-surface text-muted",
+  unconfigured: "border-border bg-surface text-muted",
+  unavailable: "border-border bg-surface text-muted",
+  error: "border-mid bg-raised text-primary",
 };
 
 export function StatusBadge({ status }: { status: string }): React.JSX.Element {
