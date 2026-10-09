@@ -6,6 +6,31 @@ KineticCT is a self-hostable, open-source control panel for managing LXC contain
 - Backend: TypeScript Node.js API (Express) with SQLite (`better-sqlite3`), Argon2id password hashing, HTTP-only session cookies.
 - Virtualization: `VirtualizationProvider` interface + local LXC host agent (`lxc-*` via safe argument vectors). No node configured → the UI reports “unavailable” honestly instead of fabricating data.
 
+## Install (one shot)
+
+Prerequisites: a Linux host with Node.js 22+, npm, git, and (optionally) systemd.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xAyan55/KineticContainers/main/install.sh | bash
+```
+
+Or, from a local clone:
+
+```bash
+./install.sh
+```
+
+The installer asks for every setting (port, admin email/password, session lifetime, …) with sensible defaults, writes a `0600` `.env` (backing up any existing one), installs dependencies, builds the frontend and backend, applies database migrations, and keeps the panel running via PM2 (default, with boot hook) or a `kineticct` systemd service. Manage a PM2 install with `pm2 [logs|restart|stop|monit] kineticct`. Useful flags:
+
+| Flag | Effect |
+|---|---|
+| `--yes` | Accept all defaults (reads answers from the environment when exported, e.g. `SEED_ADMIN_EMAIL=…`). Generates a strong admin password if none is given. |
+| `--non-interactive` | Like `--yes`, but fail instead of guessing when a required value has no default. |
+| `--service pm2\|systemd\|none` | How to keep the panel running on boot (default: `pm2`). |
+| `--no-service` | Skip the systemd service prompt. |
+| `--start` | Launch the server in the foreground when finished. |
+| `--dir DIR` / `--branch NAME` | Control where the auto-clone goes / which branch it uses. |
+
 ## Quick start (development)
 
 Prerequisites: Node.js 22+, npm.

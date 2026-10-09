@@ -1,4 +1,10 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import path from "node:path";
+// Load the repo-root .env as a fallback so `npm --workspace` runs and the
+// systemd unit (WorkingDirectory=server/) pick up the installer's config.
+// Precedence: real environment > server/.env > repo-root .env.
+dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
+dotenv.config();
 import { createApp, ensureSeedAdmin } from "./app.js";
 import { getDb } from "./db.js";
 

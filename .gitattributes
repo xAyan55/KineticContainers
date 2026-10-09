@@ -1,0 +1,2 @@
+# Keep the installer runnable on Linux when cloned on Windows.
+install.sh text eol=lf
