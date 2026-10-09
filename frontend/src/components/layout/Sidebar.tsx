@@ -26,12 +26,8 @@ interface NavEntry {
   Icon: LucideIcon;
 }
 
-// Dashboard and My VPS intentionally share the same page: the dashboard IS
-// the user's VPS list. Both items map to "/" rather than inventing a route.
-const MAIN_NAV: NavEntry[] = [
-  { to: "/", end: true, label: "Dashboard", Icon: LayoutDashboard },
-  { to: "/", end: true, label: "My VPS", Icon: Server },
-];
+// The dashboard IS the user's VPS list — one entry, no duplicates.
+const MAIN_NAV: NavEntry[] = [{ to: "/", end: true, label: "Dashboard", Icon: LayoutDashboard }];
 
 const ACCOUNT_NAV: NavEntry[] = [{ to: "/profile", end: true, label: "Profile", Icon: UserRound }];
 
