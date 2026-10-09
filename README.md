@@ -8,7 +8,7 @@ KineticCT is a self-hostable, open-source control panel for managing LXC contain
 
 ## Install (one shot)
 
-Prerequisites: a Linux host with Node.js 22+, npm, git, and (optionally) systemd.
+Prerequisites: a Linux host with bash. The installer auto-installs system dependencies when missing (git, curl, Node.js 22+, C++ build tools for native modules, PM2) using apt/dnf/yum/zypper/pacman/apk/brew — pass `--no-system-deps` to require them preinstalled instead. Project dependencies are installed with npm automatically.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xAyan55/KineticContainers/main/install.sh | bash

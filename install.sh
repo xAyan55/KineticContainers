@@ -13,10 +13,16 @@
 #       --service WHICH   Keep the panel running on boot via pm2 (default),
 #                         systemd, or none.  May also be set with SERVICE=...
 #       --no-service      Same as --service none.
+#       --no-system-deps  Do not install system packages (git, Node.js, build
+#                         tools) — fail instead if they are missing.
 #       --start           Start the server in the foreground when finished.
 #       --dir DIR         Install directory when cloning (default: $HOME/KineticContainers).
 #       --branch NAME     Git branch to clone (default: main).
 #   -h, --help            Show this help.
+#
+# System dependencies (git, curl, Node.js 22+, C++ build tools for native
+# modules) are installed automatically on Linux when missing. Project
+# dependencies are always installed with npm further down.
 #
 # Every prompt can also be answered non-interactively by exporting the
 # corresponding variable before running, e.g.:
@@ -30,6 +36,7 @@ DEFAULT_BRANCH="main"
 YES=0
 NON_INTERACTIVE=0
 NO_SERVICE=0
+SYS_DEPS=1
 SERVICE="${SERVICE:-}"
 START_NOW=0
 INSTALL_DIR="${INSTALL_DIR:-$HOME/KineticContainers}"
@@ -57,6 +64,7 @@ while [ $# -gt 0 ]; do
     --service) SERVICE="$2"; shift 2 ;;
     --service=*) SERVICE="${1#--service=}"; shift ;;
     --no-service) NO_SERVICE=1; shift ;;
+    --no-system-deps) SYS_DEPS=0; shift ;;
     --start) START_NOW=1; shift ;;
     --dir) INSTALL_DIR="$2"; shift 2 ;;
     --dir=*) INSTALL_DIR="${1#--dir=}"; shift ;;
@@ -66,6 +74,119 @@ while [ $# -gt 0 ]; do
     *) die "Unknown option: $1 (see --help)" ;;
   esac
 done
+
+# ---------------------------------------------------------------------------
+# system dependencies (git, curl, Node.js 22+, build tools)
+# ---------------------------------------------------------------------------
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ON_WINDOWS=1;; *) ON_WINDOWS=0;; esac
+
+PKG_MGR=""
+detect_pkg_mgr() {
+  [ -n "$PKG_MGR" ] && return 0
+  if command -v apt-get >/dev/null 2>&1; then PKG_MGR=apt
+  elif command -v dnf >/dev/null 2>&1; then PKG_MGR=dnf
+  elif command -v yum >/dev/null 2>&1; then PKG_MGR=yum
+  elif command -v zypper >/dev/null 2>&1; then PKG_MGR=zypper
+  elif command -v pacman >/dev/null 2>&1; then PKG_MGR=pacman
+  elif command -v apk >/dev/null 2>&1; then PKG_MGR=apk
+  elif command -v brew >/dev/null 2>&1; then PKG_MGR=brew
+  else return 1; fi
+}
+
+# Run a command with root rights (directly, via sudo, or not at all).
+run_root() {
+  if [ "$(id -u)" -eq 0 ]; then "$@"
+  elif command -v sudo >/dev/null 2>&1; then sudo "$@"
+  else return 126; fi
+}
+
+pkg_install() {
+  detect_pkg_mgr || return 1
+  case "$PKG_MGR" in
+    apt) run_root apt-get update -qq && run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" ;;
+    dnf) run_root dnf install -y -q "$@" ;;
+    yum) run_root yum install -y -q "$@" ;;
+    zypper) run_root zypper --non-interactive -q in "$@" ;;
+    pacman) run_root pacman -Sy --noconfirm --needed "$@" ;;
+    apk) run_root apk add --quiet "$@" ;;
+    brew) brew install "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
+# git + curl must exist before we can clone or download anything.
+ensure_base_tools() {
+  [ "$ON_WINDOWS" -eq 1 ] && return 0
+  local need=()
+  command -v git >/dev/null 2>&1 || need+=(git)
+  command -v curl >/dev/null 2>&1 || need+=(curl)
+  [ "${#need[@]}" -eq 0 ] && return 0
+  [ "$SYS_DEPS" -eq 0 ] && die "Missing required tools: ${need[*]} (auto-install disabled by --no-system-deps)."
+  say "Installing system packages: ${need[*]} ..."
+  pkg_install "${need[@]}" || die "Could not install ${need[*]}. Install them manually and re-run."
+  hash -r 2>/dev/null || true
+}
+
+# True when node 22+ and npm are usable.
+node_ok() {
+  command -v node >/dev/null 2>&1 || return 1
+  command -v npm >/dev/null 2>&1 || return 1
+  [ "$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)" -ge 22 ]
+}
+
+# Guaranteed-22 Node.js from the official builds (distro repos are too old).
+install_nodejs() {
+  [ "$ON_WINDOWS" -eq 1 ] && die "Node.js 22+ is required. Install it from https://nodejs.org and re-run."
+  [ "$SYS_DEPS" -eq 0 ] && die "Node.js 22+ is required (auto-install disabled by --no-system-deps)."
+  command -v curl >/dev/null 2>&1 || { pkg_install curl || die "curl is required to download Node.js."; }
+  local os arch sums fname from_sums=0 base url tmp
+  os="$(uname -s)"; arch="$(uname -m)"
+  case "$os" in Linux) os="linux";; Darwin) os="darwin";; *) die "Unsupported OS for automatic Node.js install: $os" ;; esac
+  case "$arch" in x86_64) arch="x64";; aarch64|arm64) arch="arm64";; armv7l) arch="armv7l";; *) die "Unsupported CPU for automatic Node.js install: $arch" ;; esac
+  base="https://nodejs.org/dist/latest-v22.x/"
+  tmp="$(mktemp -d)"
+  if sums="$(curl -fsSL --max-time 30 "$base/SHASUMS256.txt")"; then
+    fname="$(printf '%s\n' "$sums" | awk -v pat="node-v22.*-${os}-${arch}[.]tar[.]gz$" '$2 ~ pat {print $2; exit}')"
+    [ -n "$fname" ] && from_sums=1
+  fi
+  if [ -z "${fname:-}" ]; then
+    fname="node-v22.14.0-${os}-${arch}.tar.gz" # pinned, known-good fallback
+    base="https://nodejs.org/dist/v22.14.0/"
+  fi
+  url="${base}${fname}"
+  say "Downloading Node.js (${fname}) ..."
+  curl -fsSL --retry 3 -o "$tmp/$fname" "$url" || die "Node.js download failed."
+  if [ "$from_sums" -eq 1 ] && command -v sha256sum >/dev/null 2>&1; then
+    (cd "$tmp" && printf '%s\n' "$sums" | grep -F " $fname" | sha256sum -c -) \
+      || die "Node.js checksum verification failed."
+  fi
+  say "Installing Node.js to /usr/local ..."
+  tar -xzf "$tmp/$fname" -C "$tmp" || die "Node.js archive extraction failed."
+  local dir
+  dir="$(find "$tmp" -maxdepth 1 -type d -name 'node-v*' | head -1)"
+  run_root cp -a "$dir/bin" "$dir/include" "$dir/lib" "$dir/share" /usr/local/ \
+    || die "Node.js install failed (need root or sudo)."
+  rm -rf "$tmp"; hash -r 2>/dev/null || true
+  node_ok || die "Node.js install did not yield node 22+ on PATH."
+}
+
+# C++ toolchain for native modules (argon2, better-sqlite3), on demand only.
+install_build_toolchain() {
+  [ "$ON_WINDOWS" -eq 1 ] && return 1
+  [ "$SYS_DEPS" -eq 0 ] && return 1
+  detect_pkg_mgr || return 1
+  say "Installing C++ build tools for native modules ..."
+  case "$PKG_MGR" in
+    apt) pkg_install build-essential python3 ;;
+    dnf|yum) pkg_install gcc-c++ make python3 ;;
+    pacman) pkg_install base-devel python ;;
+    zypper) pkg_install gcc-c++ make python3 ;;
+    apk) pkg_install build-base python3 ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_base_tools
 
 # If we are not inside a checkout (e.g. `curl ... | bash`), clone and re-exec.
 if [ ! -f "server/package.json" ] || [ ! -f "frontend/package.json" ]; then
@@ -85,6 +206,7 @@ if [ ! -f "server/package.json" ] || [ ! -f "frontend/package.json" ]; then
   [ "$NON_INTERACTIVE" -eq 1 ] && set -- "$@" --non-interactive
   [ -n "${SERVICE:-}" ] && set -- "$@" --service="$SERVICE"
   [ "$NO_SERVICE" -eq 1 ] && set -- "$@" --no-service
+  [ "$SYS_DEPS" -eq 0 ] && set -- "$@" --no-system-deps
   [ "$START_NOW" -eq 1 ] && set -- "$@" --start
   exec bash "$INSTALL_DIR/install.sh" "$@"
 fi
@@ -94,8 +216,14 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 # ---------------------------------------------------------------------------
 # prerequisites
 # ---------------------------------------------------------------------------
-say "Checking prerequisites ..."
-command -v node >/dev/null 2>&1 || die "Node.js is not installed. Install Node.js 22+ then re-run."
+say "Checking system dependencies ..."
+if ! node_ok; then
+  if [ "$ON_WINDOWS" -eq 1 ]; then
+    die "Node.js 22+ is required. Install it from https://nodejs.org and re-run."
+  fi
+  install_nodejs
+fi
+command -v node >/dev/null 2>&1 || die "Node.js is not installed."
 NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
 [ "$NODE_MAJOR" -ge 22 ] || die "Node.js 22+ is required (found $(node -v))."
 command -v npm >/dev/null 2>&1 || die "npm was not found alongside Node.js."
@@ -244,9 +372,16 @@ chmod 600 "$ENV_FILE"
 # ---------------------------------------------------------------------------
 # install + build
 # ---------------------------------------------------------------------------
-say "Installing dependencies ..."
+say "Installing project dependencies (frontend + backend) ..."
 cd "$REPO_ROOT"
-npm install --no-audit --no-fund || die "npm install failed."
+if ! npm install --no-audit --no-fund; then
+  warn "npm install failed — retrying with the C++ build toolchain installed ..."
+  if install_build_toolchain && npm install --no-audit --no-fund; then
+    info "Install succeeded after adding build tools."
+  else
+    die "npm install failed."
+  fi
+fi
 # Native modules (argon2, better-sqlite3) need install-script approval on npm 11+.
 if npm approve-scripts --help >/dev/null 2>&1; then
   npm approve-scripts argon2 better-sqlite3 esbuild >/dev/null 2>&1 || true
