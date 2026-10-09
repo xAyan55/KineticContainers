@@ -10,6 +10,13 @@
 #
 set -euo pipefail
 
+# This script never reads stdin (it is usually piped via curl) and must never
+# wait on an interactive prompt — fail fast with an error instead of hanging.
+exec </dev/null
+export GIT_TERMINAL_PROMPT=0
+export DEBIAN_FRONTEND=noninteractive
+export NPM_CONFIG_UPDATE_NOTIFIER=false
+
 DIR="${KCT_DIR:-/root/KineticContainers}"
 
 say()  { printf '\033[1m%s\033[0m\n' "$*"; }
