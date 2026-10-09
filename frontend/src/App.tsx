@@ -1,7 +1,7 @@
 import * as React from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, RequireAdmin, RequireAuth } from "@/features/auth/AuthContext";
-import { AppShell, AdminLayout } from "@/components/layout/AppShell";
+import { AppShell } from "@/components/layout/AppShell";
 import { LoginPage } from "@/pages/Login";
 import { RegisterPage } from "@/pages/Register";
 import { DashboardPage } from "@/pages/Dashboard";
@@ -57,9 +57,7 @@ export function App(): React.JSX.Element {
             element={
               <RequireAdmin>
                 <AppShell appName={appName}>
-                  <AdminLayout>
-                    <AdminOverviewPage />
-                  </AdminLayout>
+                  <AdminOverviewPage />
                 </AppShell>
               </RequireAdmin>
             }
@@ -69,9 +67,7 @@ export function App(): React.JSX.Element {
             element={
               <RequireAdmin>
                 <AppShell appName={appName}>
-                  <AdminLayout>
-                    <AdminUsersPage />
-                  </AdminLayout>
+                  <AdminUsersPage />
                 </AppShell>
               </RequireAdmin>
             }
@@ -81,9 +77,7 @@ export function App(): React.JSX.Element {
             element={
               <RequireAdmin>
                 <AppShell appName={appName}>
-                  <AdminLayout>
-                    <AdminUserDetailPage />
-                  </AdminLayout>
+                  <AdminUserDetailPage />
                 </AppShell>
               </RequireAdmin>
             }
@@ -93,9 +87,7 @@ export function App(): React.JSX.Element {
             element={
               <RequireAdmin>
                 <AppShell appName={appName}>
-                  <AdminLayout>
-                    <AdminCreatePage />
-                  </AdminLayout>
+                  <AdminCreatePage />
                 </AppShell>
               </RequireAdmin>
             }
@@ -105,9 +97,7 @@ export function App(): React.JSX.Element {
             element={
               <RequireAdmin>
                 <AppShell appName={appName}>
-                  <AdminLayout>
-                    <AdminSettingsPage />
-                  </AdminLayout>
+                  <AdminSettingsPage />
                 </AppShell>
               </RequireAdmin>
             }
