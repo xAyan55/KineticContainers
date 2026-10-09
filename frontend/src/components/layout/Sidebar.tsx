@@ -64,7 +64,7 @@ function NavItem({
           )
         }
       >
-        <Icon className="h-[18px] w-[18px] shrink-0" aria-hidden="true" />
+        <Icon className="h-[1.125rem] w-[1.125rem] shrink-0" aria-hidden="true" />
         {collapsed ? null : <span className="truncate">{label}</span>}
       </NavLink>
     </li>
@@ -83,7 +83,7 @@ function NavSection({
   return (
     <div>
       {collapsed ? null : (
-        <p aria-hidden="true" className="px-3 pb-1.5 pt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+        <p aria-hidden="true" className="px-3 pb-1.5 pt-4 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-muted">
           {title}
         </p>
       )}
@@ -257,7 +257,7 @@ export function Sidebar({
       aria-label="Sidebar"
       className={cn(
         "sticky top-0 hidden h-screen shrink-0 border-r border-border bg-surface transition-[width] duration-200 lg:block",
-        collapsed ? "w-[68px]" : "w-60"
+        collapsed ? "w-[4.25rem]" : "w-60"
       )}
     >
       <SidebarBody
