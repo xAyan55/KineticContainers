@@ -25,6 +25,14 @@ export function cookieName(): string {
 }
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  // `/api/v1` requests are already authenticated by the API key middleware;
+  // they never carry a session cookie. Scope enforcement happens separately
+  // in the API scope guard, so passing here does not grant extra permissions.
+  if (req.apiPrincipal) {
+    req.user = req.apiPrincipal.user;
+    next();
+    return;
+  }
   try {
     const token = req.cookies?.[cookieName()];
     if (!token || typeof token !== "string") {

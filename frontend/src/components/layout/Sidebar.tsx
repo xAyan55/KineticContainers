@@ -4,6 +4,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Gauge,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -37,6 +38,7 @@ const ADMIN_NAV: NavEntry[] = [
   { to: "/admin/nodes", end: true, label: "Nodes", Icon: Network },
   { to: "/admin/users", label: "Users", Icon: Users },
   { to: "/admin/create", end: true, label: "Create VPS", Icon: Plus },
+  { to: "/admin/api-keys", end: true, label: "API Keys", Icon: KeyRound },
   { to: "/admin/settings", end: true, label: "Settings", Icon: Settings },
 ];
 

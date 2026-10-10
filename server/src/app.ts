@@ -6,6 +6,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { getDb, getSetting, newId, nowIso } from "./db.js";
 import { hashPassword } from "./services/password.js";
+import { reapInterruptedOperations } from "./services/operations.js";
 import { csrfCheck } from "./middleware/auth.js";
 import { authRouter } from "./routes/auth.js";
 import { meRouter } from "./routes/me.js";
@@ -15,6 +16,10 @@ import { adminOverviewRouter } from "./routes/admin/overview.js";
 import { adminCreateRouter } from "./routes/admin/create.js";
 import { nodesRouter } from "./routes/nodes.js";
 import { settingsRouter } from "./routes/settings.js";
+import { auditRouter } from "./routes/audit.js";
+import { buildAdminApiKeysRouter } from "./routes/apiKeys.js";
+import { createV1Router } from "./api/v1Router.js";
+import { createDocsRouter } from "./api/docsRouter.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -25,6 +30,7 @@ export function createApp(): express.Express {
   // body cap. This path-scoped parser runs first and marks the body parsed,
   // so the smaller global parser below skips these requests.
   app.use("/api/settings/branding", express.json({ limit: "2mb" }));
+  app.use("/api/v1/settings/branding", express.json({ limit: "2mb" }));
   app.use(express.json({ limit: "256kb" }));
   app.use(cookieParser());
 
@@ -43,7 +49,16 @@ export function createApp(): express.Express {
     })
   );
 
+  // Anything left pending when the process started is from a previous run:
+  // fail it honestly instead of leaving operations stuck in `running`.
+  reapInterruptedOperations(getDb());
+
   app.get("/api/health", (_req, res) => res.json({ data: { ok: true, version: "0.1.0" } }));
+
+  // Interactive documentation + machine-readable specification (public).
+  app.use("/api/docs", createDocsRouter());
+  // Versioned, API-key-authenticated API. Session cookies are not accepted here.
+  app.use("/api/v1", createV1Router());
 
   app.use("/api/auth", csrfCheck, authRouter);
   app.use("/api/me", csrfCheck, meRouter);
@@ -52,8 +67,15 @@ export function createApp(): express.Express {
   app.use("/api/admin/overview", csrfCheck, adminOverviewRouter);
   app.use("/api/admin/users", csrfCheck, adminUsersRouter);
   app.use("/api/admin/instances", csrfCheck, adminCreateRouter);
+  app.use("/api/admin/api-keys", csrfCheck, buildAdminApiKeysRouter());
+  app.use("/api/admin/audit", csrfCheck, auditRouter);
   app.use("/api/nodes", csrfCheck, nodesRouter);
   app.use("/api/settings", csrfCheck, settingsRouter);
+
+  // Unknown API paths answer with JSON, never the SPA fallback.
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: { code: "NOT_FOUND", message: "Unknown API endpoint." } });
+  });
 
   // Serve built frontend when present (single-process self-hosting).
   const frontendDist = path.resolve(process.cwd(), "..", "frontend", "dist");

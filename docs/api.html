@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KineticCT API</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #111111;
+        --muted: #6b6b6b;
+        --line: #d8d8d8;
+        --soft: #f4f4f4;
+        --code: #f0f0f0;
+        --ok: #0a7d38;
+        --bad: #b3261e;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #101010;
+          --fg: #ededed;
+          --muted: #9a9a9a;
+          --line: #2e2e2e;
+          --soft: #191919;
+          --code: #1b1b1b;
+          --ok: #4ade80;
+          --bad: #f87171;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      a { color: inherit; }
+      header {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 16px;
+        background: var(--bg);
+        border-bottom: 1px solid var(--line);
+      }
+      .brand { font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+      .brand span { color: var(--muted); font-weight: 400; }
+      header input {
+        flex: 1 1 260px;
+        min-width: 220px;
+        padding: 8px 10px;
+        background: var(--soft);
+        color: var(--fg);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        font: inherit;
+      }
+      header .note { color: var(--muted); font-size: 12px; }
+      header .links { display: flex; gap: 10px; font-size: 12px; }
+      main { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; min-height: calc(100vh - 58px); }
+      @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+      nav { border-right: 1px solid var(--line); padding: 8px 0 40px; }
+      nav .group {
+        padding: 14px 16px 6px;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      nav button {
+        display: flex;
+        gap: 8px;
+        width: 100%;
+        padding: 7px 16px;
+        background: none;
+        border: 0;
+        color: var(--fg);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      nav button:hover { background: var(--soft); }
+      nav button[aria-current="true"] { background: var(--soft); font-weight: 700; }
+      nav .m { min-width: 54px; font-weight: 700; }
+      nav .s { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      section { padding: 20px 24px 80px; max-width: 980px; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      h2 { font-size: 13px; margin: 26px 0 8px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+      .path { color: var(--muted); word-break: break-all; }
+      .method { font-weight: 700; }
+      .pill {
+        display: inline-block;
+        padding: 1px 7px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 11px;
+        margin-right: 6px;
+      }
+      .pill.admin { background: var(--code); }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--muted); font-weight: 600; }
+      code, pre { background: var(--code); border-radius: 4px; }
+      code { padding: 1px 5px; }
+      pre { padding: 12px; overflow: auto; max-height: 420px; border: 1px solid var(--line); }
+      textarea, input[type="text"] {
+        width: 100%;
+        padding: 8px 10px;
+        background: var(--soft);
+        color: var(--fg);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        font: inherit;
+      }
+      textarea { min-height: 150px; resize: vertical; }
+      .field { margin-bottom: 12px; }
+      .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+      .run {
+        margin-top: 8px;
+        padding: 9px 16px;
+        background: var(--fg);
+        color: var(--bg);
+        border: 1px solid var(--fg);
+        border-radius: 4px;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .run:hover { opacity: 0.86; }
+      .run:disabled { opacity: 0.5; cursor: wait; }
+      .status { font-weight: 700; }
+      .status.ok { color: var(--ok); }
+      .status.bad { color: var(--bad); }
+      .empty, .error { color: var(--muted); }
+      .error { color: var(--bad); }
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+      dt { color: var(--muted); }
+      dd { margin: 0; }
+      .foot { margin-top: 34px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">KineticCT <span>API explorer</span></div>
+      <input id="token" type="password" autocomplete="off" spellcheck="false"
+             placeholder="Bearer token (kct_live_…)" aria-label="Bearer token" />
+      <span class="note" id="tokenNote">kept in memory only — never stored</span>
+      <span class="links">
+        <a href="/api/docs/openapi.json" target="_blank" rel="noreferrer">openapi.json</a>
+        <a href="/api/v1/health">health</a>
+      </span>
+    </header>
+    <main>
+      <nav id="list" aria-label="Operations"></nav>
+      <section id="detail">
+        <p class="empty">Loading specification…</p>
+      </section>
+    </main>
+    <script>
+      (function () {
+        "use strict";
+        var spec = null;
+        var current = null;
+        var token = "";
+        var ops = [];
+
+        var listEl = document.getElementById("list");
+        var detailEl = document.getElementById("detail");
+        var tokenEl = document.getElementById("token");
+
+        tokenEl.addEventListener("input", function () {
+          token = tokenEl.value.trim();
+        });
+
+        function esc(value) {
+          return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+
+        function buildOps() {
+          Object.keys(spec.paths || {}).forEach(function (path) {
+            var item = spec.paths[path];
+            ["get", "post", "put", "patch", "delete"].forEach(function (method) {
+              var op = item[method];
+              if (!op) return;
+              ops.push({
+                id: op.operationId || method + " " + path,
+                method: method,
+                upper: method.toUpperCase(),
+                path: path,
+                summary: op.summary || op.operationId || "",
+                tag: (op.tags && op.tags[0]) || "Other",
+                scope: op["x-scope"] || null,
+                admin: Boolean(op["x-admin-role"]),
+                sensitive: Boolean(op["x-sensitive"]),
+                op: op,
+                shared: item,
+              });
+            });
+          });
+        }
+
+        function renderList() {
+          var html = "";
+          var tag = null;
+          ops.forEach(function (entry, index) {
+            if (entry.tag !== tag) {
+              tag = entry.tag;
+              html += '<div class="group">' + esc(tag) + "</div>";
+            }
+            html +=
+              '<button type="button" data-i="' + index + '" aria-current="' + (current === index ? "true" : "false") + '">' +
+              '<span class="m">' + entry.upper + "</span>" +
+              '<span class="s">' + esc(entry.summary) + "</span></button>";
+          });
+          listEl.innerHTML = html;
+        }
+
+        function paramRow(param, where) {
+          return "<tr><td><code>" + esc(param.name) + "</code></td><td>" + esc(where) +
+            "</td><td>" + (param.required ? "required" : "optional") +
+            "</td><td>" + esc(param.description || "") + "</td></tr>";
+        }
+
+        function schemaFor(body) {
+          if (!body) return null;
+          var content = body.content || {};
+          if (content["application/json"]) return content["application/json"];
+          return content[Object.keys(content)[0]] || null;
+        }
+
+        function renderDetail(index) {
+          current = index;
+          renderList();
+          var entry = ops[index];
+          if (!entry) { detailEl.innerHTML = '<p class="empty">Select an operation.</p>'; return; }
+          var op = entry.op;
+
+          var html = "";
+          html += '<h1><span class="method">' + entry.upper + "</span> " + esc(entry.summary) + "</h1>";
+          html += '<div class="path">' + esc(entry.upper + " " + entry.path) + "</div>";
+          html += "<div style='margin-top:10px'>";
+          if (entry.scope === "*") html += '<span class="pill admin">FULL ACCESS</span>';
+          else if (entry.scope) html += '<span class="pill">scope: ' + esc(entry.scope) + "</span>";
+          if (entry.admin) html += '<span class="pill admin">admin role</span>';
+          if (entry.sensitive) html += '<span class="pill">rate limited: 20/min</span>';
+          html += "</div>";
+          if (op.description) html += "<p>" + esc(op.description) + "</p>";
+
+          var params = (entry.shared.parameters || []).concat(op.parameters || []);
+          if (params.length) {
+            html += "<h2>Parameters</h2><table><thead><tr><th>Name</th><th>In</th><th>Required</th><th>Description</th></tr></thead><tbody>";
+            params.forEach(function (param) {
+              var ref = param.$ref ? deref(param.$ref) : param;
+              html += paramRow(ref, ref.in || "?");
+            });
+            html += "</tbody></table>";
+          }
+
+          var body = schemaFor(entry.shared.requestBody || op.requestBody);
+          var requestBody = body && (body.example !== undefined ? body.example : sampleFor(body.schema));
+
+          html += "<h2>Request</h2>";
+          html += '<div class="field"><label>Bearer token</label>' +
+            '<input type="password" id="opToken" autocomplete="off" placeholder="' +
+            (token ? "using the token entered above" : "leave empty for public endpoints") + '" /></div>';
+          params.forEach(function (p, i) {
+            var ref = p.$ref ? deref(p.$ref) : p;
+            html += '<div class="field"><label>' + esc(ref.name) + " (" + (ref.in || "path") +
+              (ref.required ? ", required" : "") + ")</label>" +
+              '<input type="text" data-param="' + esc(ref.name) + '" id="p' + i + '" value="' +
+              esc(paramHint(ref)) + '" /></div>';
+          });
+          if (body) {
+            html += '<div class="field"><label>JSON body</label><textarea id="body" spellcheck="false">' +
+              esc(requestBody === undefined ? "{}" : JSON.stringify(requestBody, null, 2)) +
+              "</textarea></div>";
+          }
+          html += '<button class="run" id="run" type="button">Run request</button>';
+          html += '<div id="result"></div>';
+
+          html += "<h2>Responses</h2><table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody>";
+          Object.keys(op.responses || {}).forEach(function (code) {
+            html += "<tr><td><code>" + esc(code) + "</code></td><td>" + esc(op.responses[code].description || "") + "</td></tr>";
+          });
+          html += "</tbody></table>";
+
+          html += '<div class="foot">Authenticated requests are limited to 120/min (20/min for marked operations), ' +
+            "tracked per API key and reported through <code>RateLimit-*</code> headers. " +
+            "Responses carry <code>X-Request-Id</code>; include it when reporting a problem. " +
+            "The console WebSocket is session-only and not exposed here.</div>";
+
+          detailEl.innerHTML = html;
+
+          var run = document.getElementById("run");
+          run.addEventListener("click", function () { execute(entry, params, Boolean(body)); });
+        }
+
+        function deref(ref) {
+          var parts = String(ref).replace(/^#\//, "").split("/");
+          var node = spec;
+          for (var i = 0; i < parts.length; i += 1) node = node[parts[i]] || {};
+          return node;
+        }
+
+        function paramHint(param) {
+          if (param.example !== undefined) return String(param.example);
+          if (param.schema && param.schema.example !== undefined) return String(param.schema.example);
+          if (param.schema && param.schema.default !== undefined) return String(param.schema.default);
+          if (param.schema && param.schema.enum) return param.schema.enum[0];
+          return param.in === "path" ? ":" + param.name : "";
+        }
+
+        function sampleFor(schema, depth) {
+          depth = depth || 0;
+          if (!schema || depth > 4) return undefined;
+          if (schema.example !== undefined) return schema.example;
+          if (schema.default !== undefined) return schema.default;
+          if (schema.enum) return schema.enum[0];
+          var type = Array.isArray(schema.type) ? schema.type[0] : schema.type;
+          if (type === "object") {
+            var out = {};
+            Object.keys(schema.properties || {}).forEach(function (key) {
+              var value = sampleFor(schema.properties[key], depth + 1);
+              if (value !== undefined) out[key] = value;
+            });
+            return out;
+          }
+          if (type === "array") return [];
+          if (type === "string") return "";
+          if (type === "integer" || type === "number") return 0;
+          if (type === "boolean") return false;
+          if (schema.oneOf || schema.anyOf) return sampleFor((schema.oneOf || schema.anyOf)[0], depth + 1);
+          return undefined;
+        }
+
+        function execute(entry, params, hasBody) {
+          var run = document.getElementById("run");
+          var result = document.getElementById("result");
+          var opToken = (document.getElementById("opToken") || {}).value || "";
+          var chosen = (opToken || token).trim();
+
+          var url = entry.path;
+          var query = [];
+          var ok = true;
+          params.forEach(function (p) {
+            var ref = p.$ref ? deref(p.$ref) : p;
+            var input = document.querySelector('[data-param="' + cssEscape(ref.name) + '"]');
+            var value = input ? input.value.trim() : "";
+            if (ref.in === "path") {
+              if (!value) ok = false;
+              url = url.replace(":" + ref.name, encodeURIComponent(value));
+            } else if (value) {
+              query.push(encodeURIComponent(ref.name) + "=" + encodeURIComponent(value));
+            } else if (ref.required) {
+              ok = false;
+            }
+          });
+          if (!ok) {
+            result.innerHTML = '<p class="error">Fill in every path (and required) parameter first.</p>';
+            return;
+          }
+          if (query.length) url += "?" + query.join("&");
+
+          var headers = { Accept: "application/json" };
+          var init = { method: entry.upper, headers: headers };
+          if (chosen) headers.Authorization = "Bearer " + chosen;
+          if (hasBody) {
+            var raw = document.getElementById("body").value.trim();
+            if (raw) {
+              try { JSON.parse(raw); } catch (err) {
+                result.innerHTML = '<p class="error">Body is not valid JSON: ' + esc(err.message) + "</p>";
+                return;
+              }
+              headers["Content-Type"] = "application/json";
+              init.body = raw;
+            }
+          }
+
+          run.disabled = true;
+          result.innerHTML = "<p class='empty'>Calling " + esc(entry.upper + " " + url) + "…</p>";
+          var started = Date.now();
+          fetch(url, init)
+            .then(function (res) {
+              return res.text().then(function (text) { return { res: res, text: text }; });
+            })
+            .then(function (info) {
+              var res = info.res;
+              var pretty = info.text;
+              try { pretty = JSON.stringify(JSON.parse(info.text), null, 2); } catch (err) { /* keep raw */ }
+              var head = "";
+              head += '<p><span class="status ' + (res.ok ? "ok" : "bad") + '">' + res.status + " " + esc(res.statusText) + "</span>";
+              head += " · " + (Date.now() - started) + " ms";
+              var rid = res.headers.get("x-request-id");
+              if (rid) head += " · <code>X-Request-Id: " + esc(rid) + "</code>";
+              var rl = res.headers.get("ratelimit-remaining");
+              if (rl !== null) head += " · <code>RateLimit-Remaining: " + esc(rl) + "</code>";
+              head += "</p>";
+              result.innerHTML = head + "<pre>" + esc(pretty) + "</pre>";
+            })
+            .catch(function (err) {
+              result.innerHTML = '<p class="error">Request failed: ' + esc(err.message) + "</p>";
+            })
+            .finally(function () { run.disabled = false; });
+        }
+
+        function cssEscape(value) {
+          return String(value).replace(/["\\]/g, "\\$&");
+        }
+
+        listEl.addEventListener("click", function (event) {
+          var button = event.target.closest("button[data-i]");
+          if (button) renderDetail(Number(button.getAttribute("data-i")));
+        });
+
+        fetch("/api/docs/openapi.json", { headers: { Accept: "application/json" } })
+          .then(function (res) {
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            return res.json();
+          })
+          .then(function (data) {
+            spec = data;
+            buildOps();
+            renderDetail(0);
+          })
+          .catch(function (err) {
+            detailEl.innerHTML = '<p class="error">Could not load /api/docs/openapi.json — ' + esc(err.message) + "</p>";
+          });
+      })();
+    </script>
+  </body>
+</html>

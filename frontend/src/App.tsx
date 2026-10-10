@@ -12,6 +12,7 @@ import { AdminNodesPage } from "@/pages/admin/Nodes";
 import { AdminUsersPage } from "@/pages/admin/Users";
 import { AdminUserDetailPage } from "@/pages/admin/UserDetail";
 import { AdminCreatePage } from "@/pages/admin/Create";
+import { AdminApiKeysPage } from "@/pages/admin/ApiKeys";
 import { AdminSettingsPage } from "@/pages/admin/Settings";
 import { NotFoundPage } from "@/pages/NotFound";
 import { api } from "@/lib/api";
@@ -116,6 +117,16 @@ export function App(): React.JSX.Element {
               <RequireAdmin>
                 <AppShell appName={appName}>
                   <AdminCreatePage />
+                </AppShell>
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/api-keys"
+            element={
+              <RequireAdmin>
+                <AppShell appName={appName}>
+                  <AdminApiKeysPage />
                 </AppShell>
               </RequireAdmin>
             }

@@ -136,6 +136,51 @@ const MIGRATIONS: Migration[] = [
       ensureLocalNode(db);
     },
   },
+  {
+    // API keys (Bearer auth for /api/v1) + the operation/job log that makes
+    // long-running infrastructure work inspectable and restart-safe.
+    // Pure SQL, additive only: existing rows and settings are untouched.
+    version: 3,
+    sql: `
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      key_prefix TEXT NOT NULL UNIQUE,
+      key_hash TEXT NOT NULL UNIQUE,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_by_key TEXT,
+      scopes TEXT NOT NULL DEFAULT '[]',
+      ip_allowlist TEXT,
+      expires_at TEXT,
+      last_used_at TEXT,
+      last_used_endpoint TEXT,
+      use_count INTEGER NOT NULL DEFAULT 0,
+      rotated_from TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_created_by ON api_keys(created_by);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_created_by_key ON api_keys(created_by_key);
+    CREATE TABLE IF NOT EXISTS operations (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('queued','running','succeeded','failed','cancelled')),
+      instance_id TEXT,
+      node_id TEXT,
+      actor_id TEXT,
+      actor_key_id TEXT,
+      detail TEXT,
+      error TEXT,
+      progress TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_operations_created ON operations(created_at);
+    CREATE INDEX IF NOT EXISTS idx_operations_instance ON operations(instance_id);
+    `,
+  },
 ];
 
 const DEFAULT_SETTINGS: Record<string, string> = {

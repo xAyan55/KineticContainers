@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getDb, nowIso } from "../../db.js";
+import { getDb, getSetting, newId, nowIso } from "../../db.js";
 import { hashPassword } from "../../services/password.js";
 import { recordAudit, toPublicUser } from "../../services/audit.js";
 import { requireAuth, requireAdmin } from "../../middleware/auth.js";
@@ -52,6 +52,48 @@ const updateSchema = z.object({
   email: z.string().email().max(254).optional(),
   role: z.enum(["admin", "user"]).optional(),
   status: z.enum(["active", "disabled"]).optional(),
+});
+
+/** Direct account creation (the public registration flow remains separate). */
+const createSchema = z.object({
+  email: z.string().email().max(254),
+  name: z.string().trim().min(1).max(120),
+  password: z.string().min(1).max(256),
+  role: z.enum(["admin", "user"]).optional().default("user"),
+  status: z.enum(["active", "disabled"]).optional().default("active"),
+});
+
+adminUsersRouter.post("/", validate(createSchema), async (req, res) => {
+  const db = getDb();
+  const email = String(req.body.email).trim().toLowerCase();
+  const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email) as { id: string } | undefined;
+  if (existing) {
+    res.status(409).json({ error: { code: "EMAIL_TAKEN", message: "This email is already in use." } });
+    return;
+  }
+  const minLen = Number(getSetting(db, "password_min_length") ?? 10) || 10;
+  if (String(req.body.password).length < minLen) {
+    res.status(400).json({ error: { code: "WEAK_PASSWORD", message: `Password must be at least ${minLen} characters.` } });
+    return;
+  }
+  const id = newId("usr");
+  const now = nowIso();
+  db.prepare(
+    "INSERT INTO users (id, email, name, password_hash, role, status, avatar_seed, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(
+    id,
+    email,
+    String(req.body.name).trim().slice(0, 120),
+    await hashPassword(String(req.body.password)),
+    req.body.role,
+    req.body.status,
+    email,
+    now,
+    now
+  );
+  recordAudit(db, { actorId: req.user!.id, action: "admin.user_create", targetType: "user", targetId: id, detail: { email, role: req.body.role } });
+  const fresh = db.prepare("SELECT * FROM users WHERE id = ?").get(id) as Record<string, unknown>;
+  res.status(201).json({ data: { user: toPublicUser(fresh) } });
 });
 
 adminUsersRouter.patch("/:id", validate(updateSchema), (req, res) => {

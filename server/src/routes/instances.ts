@@ -32,7 +32,7 @@ instancesRouter.use(requireAuth);
 
 type InstanceRow = Record<string, unknown>;
 
-function toPublic(row: Record<string, unknown>): Record<string, unknown> {
+export function toPublic(row: Record<string, unknown>): Record<string, unknown> {
   return {
     id: row.id,
     name: row.name,

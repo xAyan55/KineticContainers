@@ -56,6 +56,8 @@ const STATUS_STYLES: Record<string, string> = {
   unconfigured: "border-border bg-surface text-muted",
   unavailable: "border-border bg-surface text-muted",
   error: "border-mid bg-raised text-primary",
+  expired: "border-border bg-surface text-muted",
+  revoked: "border-border bg-surface text-muted line-through",
 };
 
 export function StatusBadge({ status }: { status: string }): React.JSX.Element {
