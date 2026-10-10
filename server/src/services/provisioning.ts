@@ -102,6 +102,9 @@ export async function provisionInstance(
     throw new HttpError("PROVIDER_ERROR", "Could not verify the host state.", 502);
   }
 
+  // Clean up any stale failed instance with the same containerId or name
+  db.prepare("DELETE FROM instances WHERE (container_id = ? OR name = ?) AND status = 'failed'").run(containerId, input.name.trim());
+
   const id = opts.instanceId ?? newId("vps");
   const now = nowIso();
   db.prepare(

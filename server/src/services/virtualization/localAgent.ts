@@ -1021,7 +1021,7 @@ export async function ext4QuotaState(fsPath: string): Promise<Ext4QuotaState> {
     hasFeature = false;
   }
   if (!hasFeature) {
-    return { capable: true, reason: "Filesystem lacks the quota feature (enable with tune2fs -O quota).", mountpoint, device, prjquotaActive: false };
+    return { capable: false, reason: "Filesystem lacks the quota feature (requires offline tune2fs -O quota while unmounted).", mountpoint, device, prjquotaActive: false };
   }
   return { capable: true, reason: "prjquota mount option not active yet.", mountpoint, device, prjquotaActive: false };
 }
@@ -1804,7 +1804,11 @@ export class LocalLxcProvider implements VirtualizationProvider {
       } else {
         const backend = await detectStorageBackend(name).catch(() => "unknown" as const);
         if (backend === "ext4") {
-          await enforceExt4Quota(containerRootfsPath(name), name, request.storageGb);
+          try {
+            await enforceExt4Quota(containerRootfsPath(name), name, request.storageGb);
+          } catch (quotaErr) {
+            // Host ext4 filesystem does not have project quotas active; continue creation without quota
+          }
         }
       }
       // LXCFS views for correct guest-visible resources (best effort: never
