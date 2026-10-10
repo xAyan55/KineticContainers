@@ -705,8 +705,13 @@ repair_vps_only() {
   if [ ! -f "$REPO_ROOT/server/package.json" ]; then
     die "Not a KineticCT checkout: $REPO_ROOT"
   fi
-  if [ ! -d "$REPO_ROOT/server/node_modules" ]; then
-    die "Backend dependencies are missing — run update.sh (or install.sh) first, then re-run --repair."
+  # Prove the backend can actually load (handles npm-hoisted layouts where
+  # server/node_modules itself may be absent). Never assume from paths.
+  if ! (cd "$REPO_ROOT/server" && node -e "require.resolve('dotenv');require.resolve('better-sqlite3')" >/dev/null 2>&1); then
+    warn "Backend dependencies do not resolve from $REPO_ROOT/server."
+    info "server/node_modules present: $([ -d "$REPO_ROOT/server/node_modules" ] && echo yes || echo no)"
+    info "root node_modules present: $([ -d "$REPO_ROOT/node_modules" ] && echo yes || echo no)"
+    die "Cannot load the backend — run update.sh (or install.sh) first, then re-run --repair."
   fi
   if [ ! -f "$REPO_ROOT/server/dist/db.js" ]; then
     say "Building the backend (build output only; no data touched) ..."
