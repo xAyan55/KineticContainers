@@ -79,6 +79,25 @@ Each VPS gets a **hard CPU quota** (`cpu.max` / `cfs_quota_us`) plus a **shared 
 
 Storage depends on the detected backend: containers on **btrfs subvolumes** get real enforced quotas (`btrfs qgroup limit`, verified by read-back); containers on **ext4 with project quotas enabled** get real enforced quotas (`setquota -P`, verified by read-back); plain directories without quota support have no enforcement mechanism, so the panel records the allocation, shows real measured usage, and states that quotas are unenforced. Guest `df` shows filesystem totals even under quota — the UI shows the enforced quota separately and explains the distinction. The installer enables ext4 project quotas (feature flag, live remount, fstab persistence with backup) automatically on Debian/Ubuntu; other filesystems (XFS/ZFS without managed datasets) are detected and reported as unsupported rather than faked.
 
+### Disk quota troubleshooting (ext4)
+
+If setup reports a quota failure, the message now includes the tool's own reason. Common causes and checks:
+
+```bash
+# 1. Is the quota feature enabled on the filesystem?
+tune2fs -l /dev/sda1 | grep -i "filesystem features"
+# 2. Is prjquota in the live mount options?
+findmnt -n -o OPTIONS / | tr ',' '\n' | grep -E '^(prjquota|quota)$'
+# 3. Is it persisted for reboot?
+grep -E '^[^#]*[[:space:]]+/[[:space:]]' /etc/fstab
+# 4. Does a container actually have a limit?
+repquota -P / | grep -E '#1[0-9]{5}'
+```
+
+- `tune2fs -O quota` refusing on a mounted root filesystem means the feature can only be enabled from rescue/maintenance mode — the panel keeps working, quotas stay honestly unsupported until then.
+- A remount that succeeds live but isn't in `fstab` loses enforcement on reboot; the installer persists it automatically (backup at `/etc/fstab.kct-bak`) and verifies with `findmnt --verify`.
+- After quotas become active, re-run repair (`./install.sh --repair`) or per-VPS **Apply repair** so existing containers get their project IDs and limits.
+
 ### Repairing existing VPS
 
 If containers were created before limits were enforced (or drifted), reconcile them without recreating anything:

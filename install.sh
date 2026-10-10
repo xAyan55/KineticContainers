@@ -388,15 +388,23 @@ setup_ext4_project_quota() {
     esac
     if ! tune2fs -l "$device" 2>/dev/null | grep -qE 'Filesystem features:.*quota'; then
       info "Enabling the quota filesystem feature on $device ..."
-      if ! run_root tune2fs -O quota "$device" >/dev/null 2>&1; then
-        QUOTA_DETAIL="tune2fs -O quota failed on $device"
+      # Capture the tool output: a bare "failed" hides the real cause
+      # (mounted-fs refusal, missing feature support, device access, ...).
+      local tune2fs_err tune2fs_rc
+      tune2fs_err="$(run_root tune2fs -O quota "$device" 2>&1)" && tune2fs_rc=0 || tune2fs_rc=$?
+      if [ "$tune2fs_rc" -ne 0 ]; then
+        tune2fs_err="$(printf '%s' "$tune2fs_err" | tr '\n' ' ' | cut -c1-220)"
+        QUOTA_DETAIL="tune2fs -O quota failed on $device: ${tune2fs_err:-no output}"
         warn "${QUOTA_DETAIL}."
         return 1
       fi
     fi
     info "Remounting $mountpoint with project quotas ..."
-    if ! run_root mount -o remount,prjquota "$mountpoint" >/dev/null 2>&1; then
-      QUOTA_DETAIL="live remount with prjquota failed on $mountpoint"
+    local remount_err remount_rc
+    remount_err="$(run_root mount -o remount,prjquota "$mountpoint" 2>&1)" && remount_rc=0 || remount_rc=$?
+    if [ "$remount_rc" -ne 0 ]; then
+      remount_err="$(printf '%s' "$remount_err" | tr '\n' ' ' | cut -c1-220)"
+      QUOTA_DETAIL="live remount with prjquota failed on $mountpoint: ${remount_err:-no output}"
       warn "${QUOTA_DETAIL}."
       return 1
     fi
@@ -428,7 +436,7 @@ setup_ext4_project_quota() {
   if printf '%s' "$(kct_mount_opts "$mountpoint" 2>/dev/null || true)" | grep -qE '(^|,)prjquota(,|$)'; then
     QUOTA_STATUS="ok"
     QUOTA_DETAIL="project quotas active on $mountpoint"
-    LXC_EVIDENCE="${LXC_EVIDENCE}quotas: prjquota active on $mountpoint$(printf '\n')"
+    LXC_EVIDENCE="${LXC_EVIDENCE}quotas: prjquota active on $mountpoint$'\n'"
     info "Project quotas active on $mountpoint — per-container disk limits enforceable."
     return 0
   fi
@@ -481,7 +489,7 @@ setup_lxcfs() {
     return 1
   fi
   LXCFS_STATUS="ok"
-  LXC_EVIDENCE="${LXC_EVIDENCE}lxcfs: serving, integration file present$(printf '\n')"
+  LXC_EVIDENCE="${LXC_EVIDENCE}lxcfs: serving, integration file present$'\n'"
   info "LXCFS is serving container-aware resource views."
   return 0
 }
@@ -505,17 +513,17 @@ verify_lxc_basic() {
   for b in $LXC_VERSION_BINS; do
     if out="$("$b" --version 2>&1)"; then
       ver="$(printf '%s' "$out" | head -n 1)"
-      LXC_EVIDENCE="${LXC_EVIDENCE}${b}: ${ver}$(printf '\n')"
+      LXC_EVIDENCE="${LXC_EVIDENCE}${b}: ${ver}$'\n'"
     else
       warn "$b is present but would not execute --version."
-      LXC_EVIDENCE="${LXC_EVIDENCE}${b}: present but --version failed$(printf '\n')"
+      LXC_EVIDENCE="${LXC_EVIDENCE}${b}: present but --version failed$'\n'"
     fi
   done
   if ! kct_template_present; then
     LXC_DETAIL="download template missing (/usr/share/lxc/templates/lxc-download)"
     return 1
   fi
-  LXC_EVIDENCE="${LXC_EVIDENCE}template: /usr/share/lxc/templates/lxc-download present$(printf '\n')"
+  LXC_EVIDENCE="${LXC_EVIDENCE}template: /usr/share/lxc/templates/lxc-download present$'\n'"
   local user
   user="$(lxc_runtime_user)"
   if [ "$(id -u)" -eq 0 ] && [ "$user" != "root" ]; then
@@ -704,8 +712,10 @@ verify_local_node_via_dist() {
     info "Backend not built in this checkout; skipping direct Local Node check."
     return 1
   fi
-  if [ ! -d "$REPO_ROOT/server/node_modules/dotenv" ]; then
-    info "Backend dependencies missing here; skipping direct Local Node check."
+  # Resolve through node itself: npm workspaces hoist deps to the repo root,
+  # so server/node_modules/dotenv may legitimately not exist.
+  if ! (cd "$REPO_ROOT/server" && node -e "require.resolve('dotenv');require.resolve('better-sqlite3')" >/dev/null 2>&1); then
+    info "Backend dependencies do not resolve here; skipping direct Local Node check."
     return 1
   fi
   local tmp out rc=0
