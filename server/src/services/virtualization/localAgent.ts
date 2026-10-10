@@ -5,7 +5,7 @@ import type {
   VirtualizationProvider,
 } from "./provider.js";
 import { ProviderError } from "./provider.js";
-import { parseLxcLs, runLxc } from "./host.js";
+import { parseLxcLs, runHostTool, runLxc } from "./host.js";
 import { getDb } from "../../db.js";
 import os from "node:os";
 import fs from "node:fs";
@@ -235,14 +235,14 @@ export function parseLxcMetrics(output: string): { cpuSeconds: number | null; me
     let m = line.match(/^CPU use:\s*([\d.]+)\s*seconds/i);
     if (m) {
       const n = Number(m[1]);
-      cpuSeconds = Number.isFinite(n) ? n : null;
+      cpuSeconds = Number.isFinite(n) && n >= 0 ? n : null;
       continue;
     }
     m = line.match(/^Memory use:\s*([\d.]+)\s*([KMG]iB)/i);
     if (m) {
       const n = Number(m[1]);
       const unit = m[2].toUpperCase();
-      if (Number.isFinite(n)) {
+      if (Number.isFinite(n) && n >= 0) {
         const factor = unit === "GIB" ? 1024 : unit === "MIB" ? 1 : unit === "KIB" ? 1 / 1024 : 0;
         memoryMb = factor > 0 ? Math.round(n * factor * 10) / 10 : null;
       }
@@ -256,7 +256,14 @@ export async function getContainerMetrics(
 ): Promise<{ cpuSeconds: number | null; memoryMb: number | null }> {
   validateContainerId(containerId);
   const { stdout } = await run("lxc-info", ["-n", containerId]);
-  return parseLxcMetrics(stdout);
+  const parsed = parseLxcMetrics(stdout);
+  // Plausibility guard: host tooling over unlimited cgroups can emit absurd
+  // values (e.g. billions of GiB). A container can never use more than the
+  // host has — anything beyond that is reported as unavailable, never echoed.
+  return {
+    cpuSeconds: sanitizeMetric(parsed.cpuSeconds, null),
+    memoryMb: sanitizeMetric(parsed.memoryMb, hostTotalMemoryMb() || null),
+  };
 }
 
 export type CgroupVersion = "v1" | "v2" | "unknown";
@@ -278,21 +285,48 @@ export interface ResourceLimits {
   memoryMb: number;
 }
 
+/** Logical CPU count visible on this host (0 when undetectable). */
+export function hostCpuCount(): number {
+  try {
+    const n = os.cpus().length;
+    return Number.isInteger(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
- * Build the exact config lines that enforce CPU (hard quota) and memory.
+ * Resource model label. KineticCT enforces a hard CPU quota plus a shared
+ * CPU affinity set for correct guest-visible enumeration — it never claims
+ * exclusively reserved physical cores.
+ */
+export const RESOURCE_MODEL =
+  "Hard CPU quota plus a shared CPU affinity set sized to the vCPU allocation; cores remain shared with the host, never exclusively reserved.";
+
+/**
+ * Build the exact config lines that enforce CPU (hard quota), CPU visibility
+ * (shared affinity set, never an exclusivity claim) and memory.
  * Pure and unit-tested; never invents storage quotas (dir backend has none).
  */
-export function buildCgroupConfig(version: CgroupVersion, limits: ResourceLimits): string[] {
+export function buildCgroupConfig(version: CgroupVersion, limits: ResourceLimits, hostCpus: number): string[] {
   const bytes = Math.round(limits.memoryMb * 1024 * 1024);
   const quota = Math.round(limits.cpu * 100000);
-  if (version === "v1") {
-    return [
-      "lxc.cgroup.cpu.cfs_period_us = 100000",
-      `lxc.cgroup.cpu.cfs_quota_us = ${quota}`,
-      `lxc.cgroup.memory.limit_in_bytes = ${bytes}`,
-    ];
+  const lines: string[] =
+    version === "v1"
+      ? [
+          "lxc.cgroup.cpu.cfs_period_us = 100000",
+          `lxc.cgroup.cpu.cfs_quota_us = ${quota}`,
+          `lxc.cgroup.memory.limit_in_bytes = ${bytes}`,
+        ]
+      : [`lxc.cgroup2.cpu.max = ${quota} 100000`, `lxc.cgroup2.memory.max = ${bytes}`];
+  const visible = hostCpus > 0 ? Math.max(1, Math.min(limits.cpu, hostCpus)) : 0;
+  if (visible > 0) {
+    const spec = visible === 1 ? "0" : `0-${visible - 1}`;
+    lines.push(
+      version === "v1" ? `lxc.cgroup.cpuset.cpus = ${spec}` : `lxc.cgroup2.cpuset.cpus = ${spec}`
+    );
   }
-  return [`lxc.cgroup2.cpu.max = ${quota} 100000`, `lxc.cgroup2.memory.max = ${bytes}`];
+  return lines;
 }
 
 /** Config keys managed by KineticCT (both cgroup generations). */
@@ -300,9 +334,42 @@ const MANAGED_KEYS = [
   "lxc.cgroup.cpu.cfs_period_us",
   "lxc.cgroup.cpu.cfs_quota_us",
   "lxc.cgroup.memory.limit_in_bytes",
+  "lxc.cgroup.cpuset.cpus",
   "lxc.cgroup2.cpu.max",
   "lxc.cgroup2.memory.max",
+  "lxc.cgroup2.cpuset.cpus",
 ];
+
+/**
+ * Count logical CPUs in a cpuset spec ("0-3" -> 4, "0,2" -> 2).
+ * Returns null for empty/garbled specs instead of inventing a count.
+ */
+export function parseCpusetCount(spec: string | null): number | null {
+  if (!spec) return null;
+  let count = 0;
+  let valid = false;
+  for (const part of spec.split(",")) {
+    const p = part.trim();
+    if (!p) continue;
+    const range = p.match(/^(\d+)-(\d+)$/);
+    if (range) {
+      const a = Number(range[1]);
+      const b = Number(range[2]);
+      if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || b < a) return null;
+      if (b - a > 4096) return null;
+      count += b - a + 1;
+      valid = true;
+      continue;
+    }
+    if (/^\d+$/.test(p)) {
+      count += 1;
+      valid = true;
+      continue;
+    }
+    return null;
+  }
+  return valid ? count : null;
+}
 
 function stripManagedKeys(configText: string): string[] {
   return configText.split("\n").filter((line) => {
@@ -315,16 +382,18 @@ function stripManagedKeys(configText: string): string[] {
 export function parseEffectiveLimits(
   configText: string,
   version: CgroupVersion
-): { cpu: number | null; memoryMb: number | null } {
+): { cpu: number | null; memoryMb: number | null; cpuset: string | null; cpusetCpus: number | null } {
   const get = (key: string): string | null => {
     const m = configText.match(new RegExp(`^${key.replace(/\./g, "\\.")}\\s*=\\s*(\\S+)`, "m"));
     return m ? m[1] : null;
   };
   let cpu: number | null = null;
   let memoryMb: number | null = null;
+  let cpuset: string | null = null;
   if (version === "v1") {
     const quota = get("lxc.cgroup.cpu.cfs_quota_us");
     const mem = get("lxc.cgroup.memory.limit_in_bytes");
+    cpuset = get("lxc.cgroup.cpuset.cpus");
     if (quota !== null && /^-?\d+$/.test(quota)) {
       const q = Number(quota);
       cpu = q > 0 ? Math.round((q / 100000) * 100) / 100 : null;
@@ -333,18 +402,22 @@ export function parseEffectiveLimits(
   } else {
     const max = get("lxc.cgroup2.cpu.max");
     const mem = get("lxc.cgroup2.memory.max");
+    cpuset = get("lxc.cgroup2.cpuset.cpus");
     if (max !== null) {
       const q = Number(max.split(/\s+/)[0]);
       cpu = Number.isFinite(q) && q > 0 ? Math.round((q / 100000) * 100) / 100 : null;
     }
     if (mem !== null && /^\d+$/.test(mem)) memoryMb = Math.round(Number(mem) / (1024 * 1024));
   }
-  return { cpu, memoryMb };
+  return { cpu, memoryMb, cpuset, cpusetCpus: parseCpusetCount(cpuset) };
 }
 
 export interface EffectiveConfig {
   cpu: number | null;
   memoryMb: number | null;
+  cpuset: string | null;
+  cpusetCpus: number | null;
+  cpuModel: string;
   storageGb: null;
   storageEnforced: false;
   storageNote: string;
@@ -363,10 +436,13 @@ export async function readEffectiveConfig(containerId: string): Promise<Effectiv
     if (!exists) throw new ProviderError("CONTAINER_NOT_FOUND", "Container not found on node.", 404);
     throw new ProviderError("CONFIG_READ_FAILED", "Could not read the container configuration.");
   }
-  const { cpu, memoryMb } = parseEffectiveLimits(text, version);
+  const { cpu, memoryMb, cpuset, cpusetCpus } = parseEffectiveLimits(text, version);
   return {
     cpu,
     memoryMb,
+    cpuset,
+    cpusetCpus,
+    cpuModel: RESOURCE_MODEL,
     storageGb: null,
     storageEnforced: false,
     storageNote:
@@ -403,7 +479,7 @@ export async function applyResourceLimits(
     if (!exists) throw new ProviderError("CONTAINER_NOT_FOUND", "Container not found on node.", 404);
     throw new ProviderError("CONFIG_READ_FAILED", "Could not read the container configuration.");
   }
-  const lines = buildCgroupConfig(version, limits);
+  const lines = buildCgroupConfig(version, limits, hostCpuCount());
   const next = [...stripManagedKeys(current), ...lines].join("\n");
   const normalized = next.endsWith("\n") ? next : next + "\n";
   try {
@@ -431,16 +507,22 @@ export async function applyResourceLimits(
     running = false;
   }
   if (!running) return { liveApplied: false, restartRequired: false, cgroupVersion: version };
+  const quota = Math.round(limits.cpu * 100000);
+  const memBytes = String(Math.round(limits.memoryMb * 1024 * 1024));
+  const visible = hostCpuCount() > 0 ? Math.max(1, Math.min(limits.cpu, hostCpuCount())) : 0;
+  const cpusetSpec = visible === 1 ? "0" : `0-${visible - 1}`;
   const liveKeys: [string, string][] =
     version === "v1"
       ? [
           ["cpu.cfs_period_us", "100000"],
-          ["cpu.cfs_quota_us", String(Math.round(limits.cpu * 100000))],
-          ["memory.limit_in_bytes", String(Math.round(limits.memoryMb * 1024 * 1024))],
+          ["cpu.cfs_quota_us", String(quota)],
+          ["memory.limit_in_bytes", memBytes],
+          ...(visible > 0 ? [["cpuset.cpus", cpusetSpec] as [string, string]] : []),
         ]
       : [
-          ["cpu.max", `${Math.round(limits.cpu * 100000)} 100000`],
-          ["memory.max", String(Math.round(limits.memoryMb * 1024 * 1024))],
+          ["cpu.max", `${quota} 100000`],
+          ["memory.max", memBytes],
+          ...(visible > 0 ? [["cpuset.cpus", cpusetSpec] as [string, string]] : []),
         ];
   let liveApplied = true;
   for (const [key, value] of liveKeys) {
@@ -451,6 +533,655 @@ export async function applyResourceLimits(
     }
   }
   return { liveApplied, restartRequired: !liveApplied, cgroupVersion: version };
+}
+
+// ---------------------------------------------------------------------------
+// LXCFS integration (container-aware /proc and /sys views).
+// LXCFS only takes effect when its daemon serves /var/lib/lxcfs AND the
+// container config includes the distribution's integration file. Both facts
+// are verified, never assumed.
+// ---------------------------------------------------------------------------
+
+export const LXCFS_INCLUDE_LINE = "lxc.include = /usr/share/lxc/config/common.conf.d/00-lxcfs.conf";
+const LXCFS_INCLUDE_PATH = "/usr/share/lxc/config/common.conf.d/00-lxcfs.conf";
+
+function lxcfsIncludeFileExists(): boolean {
+  try {
+    return fs.existsSync(LXCFS_INCLUDE_PATH);
+  } catch {
+    return false;
+  }
+}
+
+export function lxcfsIncludePresent(configText: string): boolean {
+  return configText.split("\n").some((line) => line.trim() === LXCFS_INCLUDE_LINE);
+}
+
+/** Host-level: is the LXCFS FUSE view actually being served? */
+export function isLxcfsServing(): boolean {
+  try {
+    const mounts = fs.readFileSync("/proc/mounts", "utf8");
+    if (!/(^|\s)lxcfs\s/.test(mounts)) return false;
+    return fs.readdirSync("/var/lib/lxcfs").length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensure the container config includes the LXCFS integration file.
+ * Returns "present" (already there), "added", or "unavailable" (LXCFS not
+ * usable on this host — never faked). Does not restart anything.
+ */
+export async function ensureLxcfsInclude(containerId: string): Promise<"present" | "added" | "unavailable"> {
+  validateContainerId(containerId);
+  if (!lxcfsIncludeFileExists() || !isLxcfsServing()) return "unavailable";
+  const cfgPath = containerConfigPath(containerId);
+  let current: string;
+  try {
+    current = fs.readFileSync(cfgPath, "utf8");
+  } catch {
+    const exists = await containerExistsOnHost(containerId).catch(() => true);
+    if (!exists) throw new ProviderError("CONTAINER_NOT_FOUND", "Container not found on node.", 404);
+    throw new ProviderError("CONFIG_READ_FAILED", "Could not read the container configuration.");
+  }
+  if (lxcfsIncludePresent(current)) return "present";
+  const next = current.endsWith("\n") ? current + LXCFS_INCLUDE_LINE + "\n" : current + "\n" + LXCFS_INCLUDE_LINE + "\n";
+  try {
+    fs.writeFileSync(cfgPath, next, "utf8");
+  } catch {
+    throw new ProviderError("CONFIG_WRITE_FAILED", "Could not write the container configuration (insufficient privileges?).");
+  }
+  return "added";
+}
+
+/** Per-container: are LXCFS overlays actually mounted inside the running guest? */
+export async function isLxcfsActiveForContainer(containerId: string): Promise<boolean | null> {
+  validateContainerId(containerId);
+  let pid: number | null = null;
+  try {
+    const { stdout } = await run("lxc-info", ["-n", containerId]);
+    const m = stdout.match(/^\s*PID:\s*(\d+)/m);
+    const n = m ? Number(m[1]) : NaN;
+    pid = Number.isInteger(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+  if (pid === null) return null; // not running (or PID hidden): cannot observe mounts
+  try {
+    const mounts = fs.readFileSync(`/proc/${pid}/mountinfo`, "utf8");
+    return mounts.includes("lxcfs");
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Storage backend detection, real usage, and btrfs quotas.
+// Directory-backed containers have no quota mechanism: that is reported,
+// never invented. btrfs subvolume quotas are enforced for real.
+// ---------------------------------------------------------------------------
+
+export type StorageBackend = "btrfs" | "dir" | "unknown";
+
+export function containerRootfsPath(containerId: string): string {
+  validateContainerId(containerId);
+  return path.join(lxcRoot(), containerId, "rootfs");
+}
+
+/** Parse `df -P -T <path>` output into a filesystem type. Pure and tested. */
+export function parseDfFstype(output: string, targetPath: string): string | null {
+  const lines = output.trim().split("\n");
+  if (lines.length < 2) return null;
+  // Take the last data line (avoids wrapped header edge cases); fstype is col 2.
+  const parts = (lines[lines.length - 1] ?? "").split(/\s+/);
+  if (parts.length < 7) return null;
+  const fstype = parts[1];
+  if (!fstype || fstype === "Type") return null;
+  void targetPath;
+  return fstype.slice(0, 32);
+}
+
+/** Filesystem type backing a container's rootfs. */
+export async function detectStorageBackend(containerId: string): Promise<StorageBackend> {
+  const rootfs = containerRootfsPath(containerId);
+  try {
+    const { stdout } = await runHostTool("df", ["-P", "-T", rootfs], { timeoutMs: 15000 });
+    const fstype = parseDfFstype(stdout, rootfs);
+    if (fstype === "btrfs") return "btrfs";
+    return "dir";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Real disk consumption of a container rootfs via du. Null when unreadable. */
+export async function getContainerDiskUsageGb(containerId: string): Promise<number | null> {
+  const rootfs = containerRootfsPath(containerId);
+  try {
+    const { stdout } = await runHostTool("du", ["-sb", rootfs], { timeoutMs: 120000 });
+    const m = stdout.match(/^\s*(\d+)/);
+    if (!m) return null;
+    const bytes = Number(m[1]);
+    if (!Number.isSafeInteger(bytes) || bytes < 0) return null;
+    return Math.round((bytes / 1024 ** 3) * 100) / 100;
+  } catch {
+    return null;
+  }
+}
+
+/** True when path is a btrfs subvolume (quota-capable). */
+export async function isBtrfsSubvolume(rootfsPath: string): Promise<boolean> {
+  try {
+    await runHostTool("btrfs", ["subvolume", "show", rootfsPath], { timeoutMs: 15000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Parse `btrfs subvolume show` output for the subvolume id. Pure and tested. */
+export function parseBtrfsSubvolId(output: string): string | null {
+  const m = output.match(/^\s*Subvolume ID:\s*(\d+)\s*$/m);
+  return m ? m[1].slice(0, 16) : null;
+}
+
+/**
+ * Parse `btrfs qgroup show <path>` for the exclusive-limit (max_rfer) of a
+ * qgroup id. Returns bytes, or null when absent/unparseable. Pure + tested.
+ */
+export function parseBtrfsQgroupLimit(output: string, qgroupId: string): number | null {
+  for (const raw of output.split("\n")) {
+    const parts = raw.trim().split(/\s+/);
+    if (parts.length < 5 || parts[0] !== qgroupId) continue;
+    // Columns: qgroupid rfer excl max_rfer max_excl
+    const limit = Number(parts[3]);
+    if (Number.isSafeInteger(limit) && limit > 0 && limit < Number.MAX_SAFE_INTEGER) return limit;
+    return null;
+  }
+  return null;
+}
+
+/** Read the enforced btrfs quota (bytes) for a subvolume, or null. */
+export async function readBtrfsQuotaGb(rootfsPath: string): Promise<number | null> {
+  try {
+    const { stdout: showOut } = await runHostTool("btrfs", ["subvolume", "show", rootfsPath], { timeoutMs: 15000 });
+    const subvolId = parseBtrfsSubvolId(showOut);
+    if (!subvolId) return null;
+    const { stdout: qgOut } = await runHostTool("btrfs", ["qgroup", "show", "--raw", rootfsPath], { timeoutMs: 15000 });
+    for (const qid of [`0/${subvolId}`, subvolId]) {
+      const bytes = parseBtrfsQgroupLimit(qgOut, qid);
+      if (bytes !== null) return Math.round((bytes / 1024 ** 3) * 100) / 100;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Enable quota accounting on the filesystem (idempotent; btrfs ignores repeats with a warning). */
+export async function enableBtrfsQuota(rootfsPath: string): Promise<void> {
+  try {
+    await runHostTool("btrfs", ["quota", "enable", rootfsPath], { timeoutMs: 60000 });
+  } catch (err) {
+    if (err instanceof ProviderError && /already (enabled|enabled)|ERROR: quota/i.test(err.message)) return;
+    throw err instanceof ProviderError ? err : new ProviderError("QUOTA_FAILED", "Could not enable btrfs quotas.");
+  }
+}
+
+/** Enforce a hard quota on a btrfs subvolume and verify it stuck. */
+export async function enforceBtrfsQuota(rootfsPath: string, sizeGb: number): Promise<number> {
+  if (!Number.isInteger(sizeGb) || sizeGb < 1 || sizeGb > 2000) {
+    throw new ProviderError("INVALID_RESOURCES", "Storage allocation out of range (1-2000).", 400);
+  }
+  await enableBtrfsQuota(rootfsPath);
+  await runHostTool("btrfs", ["qgroup", "limit", `${sizeGb}G`, rootfsPath], { timeoutMs: 60000 });
+  const verified = await readBtrfsQuotaGb(rootfsPath);
+  const expected = sizeGb;
+  if (verified === null || Math.abs(verified - expected) > Math.max(0.5, expected * 0.05)) {
+    throw new ProviderError("QUOTA_VERIFY_FAILED", "Set a btrfs quota but read-back verification failed.");
+  }
+  return verified;
+}
+
+export interface StorageInfo {
+  backend: StorageBackend;
+  quotaSupported: boolean;
+  quotaGb: number | null;
+  usedGb: number | null;
+  note: string;
+}
+
+/** Real storage facts: backend detection, enforced quota (btrfs only), actual usage. */
+export async function getContainerStorage(containerId: string): Promise<StorageInfo> {
+  validateContainerId(containerId);
+  const rootfs = containerRootfsPath(containerId);
+  const backend = await detectStorageBackend(containerId);
+  const usedGb = await getContainerDiskUsageGb(containerId);
+  if (backend === "btrfs" && (await isBtrfsSubvolume(rootfs))) {
+    const quotaGb = await readBtrfsQuotaGb(rootfs);
+    if (quotaGb !== null) {
+      return {
+        backend,
+        quotaSupported: true,
+        quotaGb,
+        usedGb,
+        note: "Quota enforced via btrfs qgroup limit. Guest df shows filesystem totals, not the quota.",
+      };
+    }
+    return {
+      backend,
+      quotaSupported: true,
+      quotaGb: null,
+      usedGb,
+      note: "btrfs subvolume without an enforced quota yet. Guest df shows filesystem totals, not any quota.",
+    };
+  }
+  if (backend === "btrfs") {
+    return {
+      backend,
+      quotaSupported: false,
+      quotaGb: null,
+      usedGb,
+      note: "Rootfs is a plain directory on btrfs (not a subvolume): per-container quotas need a subvolume layout.",
+    };
+  }
+  return {
+    backend,
+    quotaSupported: false,
+    quotaGb: null,
+    usedGb,
+    note: "Disk quotas are not enforced: containers use the directory backing store, which has no quota support.",
+  };
+}
+
+/** Choose the backing store for a new container: btrfs subvolumes only on btrfs hosts. */
+export async function selectBackingStore(): Promise<"btrfs" | "dir"> {
+  try {
+    const { stdout } = await runHostTool("df", ["-P", "-T", lxcRoot()], { timeoutMs: 15000 });
+    return parseDfFstype(stdout, lxcRoot()) === "btrfs" ? "btrfs" : "dir";
+  } catch {
+    return "dir";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Metric plausibility guards. Host tooling (e.g. lxc-top over unlimited
+// cgroups) can emit absurd values; our API must return Unavailable instead
+// of echoing garbage like "2915679709.81 GiB".
+// ---------------------------------------------------------------------------
+
+/** Upper bound for a single container's memory: host RAM is a hard ceiling. */
+export function hostTotalMemoryMb(): number {
+  try {
+    const mb = Math.round(os.totalmem() / (1024 * 1024));
+    return mb > 0 ? mb : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Validate a parsed metric. Returns null for anything non-finite, negative,
+ * or physically implausible (above maxMb when a ceiling is known).
+ */
+export function sanitizeMetric(value: number | null, maxMb: number | null): number | null {
+  if (value === null || !Number.isFinite(value) || value < 0) return null;
+  if (maxMb !== null && maxMb > 0 && value > maxMb) return null;
+  return value;
+}
+
+// ---------------------------------------------------------------------------
+// Capacity and repair.
+// ---------------------------------------------------------------------------
+
+export interface HostCapacity {
+  memoryTotalMb: number;
+  memoryFreeMb: number;
+  diskAvailGb: number | null;
+}
+
+/** Real free capacity for admission checks. Nulls stay null (never invented). */
+export async function getHostCapacity(): Promise<HostCapacity> {
+  let memoryTotalMb = 0;
+  let memoryFreeMb = 0;
+  try {
+    memoryTotalMb = Math.round(os.totalmem() / (1024 * 1024));
+    memoryFreeMb = Math.round(os.freemem() / (1024 * 1024));
+  } catch {
+    memoryTotalMb = 0;
+    memoryFreeMb = 0;
+  }
+  let diskAvailGb: number | null = null;
+  try {
+    const { stdout } = await runHostTool("df", ["-P", "-B1", lxcRoot()], { timeoutMs: 15000 });
+    const lines = stdout.trim().split("\n");
+    const parts = (lines[lines.length - 1] ?? "").split(/\s+/);
+    if (parts.length >= 4) {
+      const n = Number(parts[3]);
+      if (Number.isSafeInteger(n) && n >= 0) diskAvailGb = Math.round((n / 1024 ** 3) * 10) / 10;
+    }
+  } catch {
+    diskAvailGb = null;
+  }
+  return { memoryTotalMb, memoryFreeMb, diskAvailGb };
+}
+
+/** Refuse provisioning that provably exceeds free host capacity. */
+export function checkHostCapacity(
+  capacity: HostCapacity,
+  request: { memoryMb: number; storageGb: number }
+): void {
+  if (capacity.memoryFreeMb > 0 && request.memoryMb > capacity.memoryFreeMb) {
+    throw new ProviderError(
+      "INSUFFICIENT_CAPACITY",
+      `Host has only ${capacity.memoryFreeMb} MB free memory; ${request.memoryMb} MB requested.`,
+      409
+    );
+  }
+  if (capacity.diskAvailGb !== null && request.storageGb > capacity.diskAvailGb) {
+    throw new ProviderError(
+      "INSUFFICIENT_CAPACITY",
+      `Host has only ${capacity.diskAvailGb} GB free on the container filesystem; ${request.storageGb} GB requested.`,
+      409
+    );
+  }
+}
+
+export interface RepairCheck {
+  check: string;
+  status: "ok" | "fixed" | "unsupported" | "failed";
+  detail: string;
+}
+
+export interface RepairReport {
+  containerId: string;
+  backupPath: string | null;
+  checks: RepairCheck[];
+  restartNeeded: boolean;
+  warnings: string[];
+}
+
+export interface RepairPlan {
+  containerId: string;
+  exists: boolean;
+  checks: { check: string; status: "ok" | "needs-fix" | "unsupported"; detail: string }[];
+  restartNeeded: boolean;
+  warnings: string[];
+}
+
+function backupContainerConfig(containerId: string): string | null {
+  const cfgPath = containerConfigPath(containerId);
+  const bakPath = `${cfgPath}.kct-bak`;
+  try {
+    if (fs.existsSync(bakPath)) return bakPath; // first backup wins; never overwrite history
+    fs.copyFileSync(cfgPath, bakPath);
+    return bakPath;
+  } catch {
+    return null;
+  }
+}
+
+async function containerRunning(containerId: string): Promise<boolean> {
+  try {
+    return (await readContainerState(containerId)) === "RUNNING";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read-only repair plan: compare DB allocation with effective host config.
+ * Never modifies anything. Powers the plan preview and the CLI dry-run.
+ */
+export async function planInstanceRepair(
+  containerId: string,
+  dbLimits: { cpu: number; memoryMb: number; storageGb: number }
+): Promise<RepairPlan> {
+  validateContainerId(containerId);
+  const exists = await containerExistsOnHost(containerId).catch(() => false);
+  if (!exists) {
+    return {
+      containerId,
+      exists: false,
+      checks: [{ check: "existence", status: "unsupported", detail: "Container is missing on the host; recreate it instead." }],
+      restartNeeded: false,
+      warnings: [],
+    };
+  }
+  const checks: RepairPlan["checks"] = [];
+  const warnings: string[] = [];
+  let effective: { cpu: number | null; memoryMb: number | null } | null = null;
+  try {
+    effective = await readEffectiveConfig(containerId);
+  } catch {
+    effective = null;
+  }
+  if (effective === null || effective.cpu !== dbLimits.cpu || effective.memoryMb !== dbLimits.memoryMb) {
+    checks.push({
+      check: "limits",
+      status: "needs-fix",
+      detail: `Effective ${effective?.cpu ?? "?"} vCPU / ${effective?.memoryMb ?? "?"} MB differs from allocation (${dbLimits.cpu} vCPU / ${dbLimits.memoryMb} MB).`,
+    });
+  } else {
+    checks.push({
+      check: "limits",
+      status: "ok",
+      detail: `CPU/memory match allocation (${dbLimits.cpu} vCPU, ${dbLimits.memoryMb} MB).`,
+    });
+  }
+
+  let includePresent = false;
+  try {
+    const cfg = fs.readFileSync(containerConfigPath(containerId), "utf8");
+    includePresent = lxcfsIncludePresent(cfg);
+  } catch {
+    includePresent = false;
+  }
+  if (includePresent) {
+    checks.push({ check: "lxcfs", status: "ok", detail: "LXCFS integration include present." });
+  } else if (lxcfsIncludeFileExists() && isLxcfsServing()) {
+    checks.push({ check: "lxcfs", status: "needs-fix", detail: "LXCFS is serving but the container lacks the integration include." });
+  } else {
+    checks.push({ check: "lxcfs", status: "unsupported", detail: "LXCFS is not serving on this host; guest views stay host-native." });
+  }
+
+  try {
+    const storage = await getContainerStorage(containerId);
+    if (storage.quotaSupported && storage.quotaGb === null) {
+      checks.push({ check: "storage", status: "needs-fix", detail: "btrfs subvolume without an enforced quota." });
+    } else {
+      checks.push({
+        check: "storage",
+        status: storage.quotaSupported ? "ok" : "unsupported",
+        detail:
+          storage.quotaSupported && storage.quotaGb !== null
+            ? `btrfs quota enforced at ${storage.quotaGb} GB (${storage.usedGb ?? "?"} GB used).`
+            : storage.note,
+      });
+    }
+  } catch (err) {
+    checks.push({
+      check: "storage",
+      status: "unsupported",
+      detail: err instanceof ProviderError ? err.message : "Could not inspect storage.",
+    });
+  }
+
+  const running = await containerRunning(containerId);
+  return {
+    containerId,
+    exists: true,
+    checks,
+    restartNeeded: running && checks.some((c) => c.status === "needs-fix"),
+    warnings,
+  };
+}
+
+/**
+ * Compare DB allocation with effective host config and fix what is safely
+ * fixable. Never destroys/recreates; never migrates storage; never touches
+ * other containers. Config file is backed up (once) before any change.
+ */
+export async function repairInstance(
+  containerId: string,
+  dbLimits: { cpu: number; memoryMb: number; storageGb: number }
+): Promise<RepairReport> {
+  validateContainerId(containerId);
+  const plan = await planInstanceRepair(containerId, dbLimits);
+  if (!plan.exists) {
+    return {
+      containerId,
+      backupPath: null,
+      checks: plan.checks.map((c) => ({ ...c, status: "failed" as const })),
+      restartNeeded: false,
+      warnings: plan.warnings,
+    };
+  }
+  const checks: RepairCheck[] = [];
+  const warnings: string[] = [...plan.warnings];
+  let backupPath: string | null = null;
+  let restartNeeded = false;
+
+  const need = (name: string): boolean =>
+    plan.checks.some((c) => c.check === name && c.status === "needs-fix");
+
+  // CPU/memory limits (+cpuset): back up once, re-apply, verify by read-back.
+  if (!need("limits")) {
+    const ok = plan.checks.find((c) => c.check === "limits");
+    checks.push({
+      check: "limits",
+      status: "ok",
+      detail: ok?.detail ?? "CPU/memory match allocation.",
+    });
+  } else {
+    backupPath = backupContainerConfig(containerId);
+    if (backupPath === null) {
+      checks.push({ check: "limits", status: "failed", detail: "Could not back up the container config; refusing to modify it." });
+    } else {
+      try {
+        const res = await applyResourceLimits(containerId, { cpu: dbLimits.cpu, memoryMb: dbLimits.memoryMb });
+        const re = await readEffectiveConfig(containerId);
+        if (re.cpu === dbLimits.cpu && re.memoryMb === dbLimits.memoryMb) {
+          checks.push({ check: "limits", status: "fixed", detail: `Re-applied ${dbLimits.cpu} vCPU / ${dbLimits.memoryMb} MB (cgroup ${res.cgroupVersion}).` });
+          if (res.restartRequired) restartNeeded = true;
+        } else {
+          checks.push({ check: "limits", status: "failed", detail: "Re-applied limits but read-back does not match." });
+        }
+      } catch (err) {
+        checks.push({
+          check: "limits",
+          status: "failed",
+          detail: err instanceof ProviderError ? err.message : "Could not re-apply limits.",
+        });
+      }
+    }
+  }
+
+  // LXCFS include: add when the host serves it, report otherwise.
+  if (!need("lxcfs")) {
+    const ok = plan.checks.find((c) => c.check === "lxcfs");
+    checks.push({
+      check: "lxcfs",
+      status: ok?.status === "ok" ? "ok" : "unsupported",
+      detail: ok?.detail ?? "LXCFS state unchanged.",
+    });
+    if (ok?.status === "ok") {
+      const active = await isLxcfsActiveForContainer(containerId);
+      if (active === false) {
+        restartNeeded = true;
+        checks.push({ check: "lxcfs-active", status: "unsupported", detail: "LXCFS views will appear after a container restart." });
+      }
+    }
+  } else {
+    try {
+      const ensured = await ensureLxcfsInclude(containerId);
+      if (ensured === "present" || ensured === "added") {
+        checks.push({
+          check: "lxcfs",
+          status: ensured === "added" ? "fixed" : "ok",
+          detail: ensured === "added" ? "Added the LXCFS integration include (applies on next start)." : "LXCFS integration include present.",
+        });
+        const active = await isLxcfsActiveForContainer(containerId);
+        if (active === false) {
+          restartNeeded = true;
+          checks.push({ check: "lxcfs-active", status: "unsupported", detail: "LXCFS views will appear after a container restart." });
+        }
+      } else {
+        checks.push({ check: "lxcfs", status: "unsupported", detail: "LXCFS is not serving on this host; guest views stay host-native." });
+      }
+    } catch (err) {
+      checks.push({
+        check: "lxcfs",
+        status: "failed",
+        detail: err instanceof ProviderError ? err.message : "Could not inspect LXCFS integration.",
+      });
+    }
+  }
+
+  // Storage: report-only, except btrfs subvolume quotas which are enforceable.
+  if (!need("storage")) {
+    const ok = plan.checks.find((c) => c.check === "storage");
+    checks.push({
+      check: "storage",
+      status: ok?.status === "ok" ? "ok" : "unsupported",
+      detail: ok?.detail ?? "Storage state unchanged.",
+    });
+  } else {
+    const rootfs = containerRootfsPath(containerId);
+    try {
+      const enforced = await enforceBtrfsQuota(rootfs, dbLimits.storageGb);
+      checks.push({ check: "storage", status: "fixed", detail: `Enforced btrfs quota of ${enforced} GB on the container subvolume.` });
+    } catch (err) {
+      checks.push({
+        check: "storage",
+        status: "failed",
+        detail: err instanceof ProviderError ? err.message : "Could not enforce a storage quota.",
+      });
+    }
+  }
+
+  return { containerId, backupPath, checks, restartNeeded, warnings };
+}
+
+/** Repair every managed instance registered on the local node. Read-only except per-instance fixes. */
+export async function repairLocalInstances(
+  db: { prepare: (sql: string) => { all: (...p: unknown[]) => Record<string, unknown>[] } }
+): Promise<{ repaired: RepairReport[]; checkedAt: string }> {
+  const { nowIso: stamp } = await import("../../db.js");
+  const rows = db
+    .prepare(
+      `SELECT i.container_id AS container_id, i.cpu AS cpu, i.memory_mb AS memory_mb, i.storage_gb AS storage_gb
+       FROM instances i JOIN nodes n ON n.id = i.node_id WHERE n.endpoint = 'local'`
+    )
+    .all() as { container_id: string; cpu: number; memory_mb: number; storage_gb: number }[];
+  const repaired: RepairReport[] = [];
+  for (const r of rows) {
+    try {
+      repaired.push(
+        await repairInstance(String(r.container_id), {
+          cpu: Number(r.cpu),
+          memoryMb: Number(r.memory_mb),
+          storageGb: Number(r.storage_gb),
+        })
+      );
+    } catch (err) {
+      repaired.push({
+        containerId: String(r.container_id),
+        backupPath: null,
+        checks: [
+          {
+            check: "repair",
+            status: "failed",
+            detail: err instanceof ProviderError ? err.message : "Repair failed.",
+          },
+        ],
+        restartNeeded: false,
+        warnings: [],
+      });
+    }
+  }
+  return { repaired, checkedAt: stamp() };
 }
 
 /**
@@ -535,12 +1266,17 @@ export class LocalLxcProvider implements VirtualizationProvider {
       throw new ProviderError("CONTAINER_EXISTS", "A container with this identifier already exists on the host.", 409);
     }
     const arch = downloadArch();
+    // Backing store: btrfs subvolumes only when the host path is really
+    // btrfs — otherwise the default dir backend (quotas honestly unsupported).
+    const backing = await selectBackingStore();
+    const createArgs = ["-n", name, "-t", "download"];
+    if (backing === "btrfs") createArgs.push("-B", "btrfs");
     // Narrowly privileged creation: fixed template map + host arch, no shell interpolation.
     // Image download can take minutes; allow a long timeout and surface tool output.
     try {
       await run(
         "lxc-create",
-        ["-n", name, "-t", "download", "--", "-d", image.distro, "-r", image.release, "-a", arch],
+        [...createArgs, "--", "-d", image.distro, "-r", image.release, "-a", arch],
         { timeoutMs: 10 * 60 * 1000, includeStderr: true }
       );
     } catch (err) {
@@ -558,6 +1294,18 @@ export class LocalLxcProvider implements VirtualizationProvider {
       }
       // Apply and verify the requested resource limits on the real container.
       await applyResourceLimits(name, { cpu: request.cpu, memoryMb: request.memoryMb });
+      // LXCFS views for correct guest-visible resources (best effort: never
+      // fails creation when LXCFS is unavailable on the host).
+      await ensureLxcfsInclude(name).catch(() => "unavailable" as const);
+      // Enforce the disk quota where the backend supports it (btrfs only).
+      if (backing === "btrfs") {
+        const rootfs = containerRootfsPath(name);
+        if (await isBtrfsSubvolume(rootfs)) {
+          await enforceBtrfsQuota(rootfs, request.storageGb);
+        }
+      }
+      // LXCFS views for correct guest-visible resources (best effort).
+      await ensureLxcfsInclude(name).catch(() => "unavailable" as const);
     } catch (err) {
       // Our own partial residue only: this name was verified absent above.
       await destroyQuietly(name);

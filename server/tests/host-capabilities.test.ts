@@ -102,6 +102,7 @@ describe("host capability detection", () => {
     expect(["v1", "v2", "hybrid", "none"]).toContain(caps.cgroup);
     expect(typeof caps.restrictedGuest).toBe("boolean");
     expect(caps.runtimeUid === null || typeof caps.runtimeUid === "number").toBe(true);
+    expect(typeof caps.lxcfsActive).toBe("boolean");
   });
 
   it("collects host info without throwing on any host", async () => {

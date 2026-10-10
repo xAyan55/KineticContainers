@@ -4,7 +4,7 @@ import { getDb, newId, nowIso } from "../../db.js";
 import { requireAuth, requireAdmin } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
 import { recordAudit } from "../../services/audit.js";
-import { getProvider, LocalLxcProvider, containerExistsOnHost, readContainerState } from "../../services/virtualization/localAgent.js";
+import { getProvider, LocalLxcProvider, containerExistsOnHost, readContainerState, checkHostCapacity, getHostCapacity } from "../../services/virtualization/localAgent.js";
 import { ProviderError } from "../../services/virtualization/provider.js";
 
 export const adminCreateRouter = Router();
@@ -47,6 +47,18 @@ adminCreateRouter.post("/", validate(createSchema), async (req, res) => {
   const provider = getProvider();
   if (!provider.capabilities.create) {
     res.status(409).json({ error: { code: "INFRA_UNCONFIGURED", message: "Container creation is unavailable: no virtualization node is reachable." } });
+    return;
+  }
+
+  // Admission check against real free host capacity (never invent room).
+  try {
+    checkHostCapacity(await getHostCapacity(), { memoryMb: req.body.memory_mb, storageGb: req.body.storage_gb });
+  } catch (err) {
+    if (err instanceof ProviderError) {
+      res.status(err.status).json({ error: { code: err.code, message: err.message } });
+      return;
+    }
+    res.status(502).json({ error: { code: "PROVIDER_ERROR", message: "Could not verify host capacity." } });
     return;
   }
 

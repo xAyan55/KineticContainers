@@ -71,6 +71,7 @@ interface HostCapabilities {
   bridgePresent: boolean | null;
   ipForwarding: boolean | null;
   runtimeUid: number | null;
+  lxcfsActive: boolean;
 }
 
 interface NodeCheck {
@@ -364,6 +365,10 @@ function NodeDetails({
               <Stat
                 label="IP forwarding"
                 value={ready.ipForwarding === null ? "Unavailable" : ready.ipForwarding ? "On" : "Off"}
+              />
+              <Stat
+                label="LXCFS views"
+                value={ready.lxcfsActive ? "Serving" : "Not serving"}
               />
             </div>
           );

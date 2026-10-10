@@ -11,8 +11,13 @@ import {
   containerExistsOnHost,
   getContainerMetrics,
   getContainerNetwork,
+  getContainerStorage,
+  isLxcfsActiveForContainer,
+  planInstanceRepair,
   readContainerState,
   readEffectiveConfig,
+  repairInstance,
+  RESOURCE_MODEL,
 } from "../services/virtualization/localAgent.js";
 import { checkConsoleRunnable } from "../services/virtualization/console.js";
 import { ProviderError } from "../services/virtualization/provider.js";
@@ -182,10 +187,14 @@ instancesRouter.get("/:id/config", async (req, res) => {
   }
   try {
     const effective = await readEffectiveConfig(row.container_id as string);
+    const storage = await getContainerStorage(row.container_id as string).catch(() => null);
+    const lxcfsActive = await isLxcfsActiveForContainer(row.container_id as string).catch(() => null);
     res.json({
       data: {
         configured: { cpu: row.cpu, memory_mb: row.memory_mb, storage_gb: row.storage_gb },
-        effective,
+        effective: { ...effective, cpuModel: RESOURCE_MODEL },
+        storage,
+        lxcfs: lxcfsActive === null ? null : { active: lxcfsActive },
       },
     });
   } catch (err) {
@@ -333,6 +342,68 @@ instancesRouter.delete("/:id", async (req, res) => {
 });
 
 const actionSchema = z.object({ action: z.enum(["start", "stop", "restart", "remove"]) });
+
+/**
+ * Repair plan (read-only): compare DB allocation with effective host config.
+ * Nothing is modified; use POST to apply the fixable items.
+ */
+instancesRouter.get("/:id/repair", async (req, res) => {
+  const db = getDb();
+  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  if (!row) {
+    notFound(res);
+    return;
+  }
+  if (!row.node_id || !row.container_id) {
+    res.status(409).json({ error: { code: "NO_NODE", message: "Instance is not attached to a configured node." } });
+    return;
+  }
+  try {
+    const plan = await planInstanceRepair(row.container_id as string, {
+      cpu: Number(row.cpu),
+      memoryMb: Number(row.memory_mb),
+      storageGb: Number(row.storage_gb),
+    });
+    res.json({ data: { plan } });
+  } catch (err) {
+    providerError(res, err);
+  }
+});
+
+/**
+ * Apply a safe repair: re-apply drifted CPU/memory limits (config backed up
+ * once, never overwritten), add the LXCFS include, enforce btrfs quotas.
+ * Never destroys, recreates, migrates storage, or touches other containers.
+ */
+instancesRouter.post("/:id/repair", async (req, res) => {
+  const db = getDb();
+  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  if (!row) {
+    notFound(res);
+    return;
+  }
+  if (!row.node_id || !row.container_id) {
+    res.status(409).json({ error: { code: "NO_NODE", message: "Instance is not attached to a configured node." } });
+    return;
+  }
+  try {
+    const report = await repairInstance(row.container_id as string, {
+      cpu: Number(row.cpu),
+      memoryMb: Number(row.memory_mb),
+      storageGb: Number(row.storage_gb),
+    });
+    recordAudit(db, {
+      actorId: req.user!.id,
+      action: "instance.repair",
+      targetType: "instance",
+      targetId: row.id as string,
+      detail: { checks: report.checks.map((c) => `${c.check}:${c.status}`) },
+    });
+    res.json({ data: { report } });
+  } catch (err) {
+    providerError(res, err);
+  }
+});
 
 /** Console preflight: is an interactive console actually available? No session is opened. */
 instancesRouter.get("/:id/console", async (req, res) => {

@@ -21,6 +21,13 @@ const LXC_ALLOWLIST = new Set([
   "lxc-cgroup",
 ]);
 
+/**
+ * Second, even narrower allowlist for read-only host inspection tools.
+ * Callers must pass fully fixed argument vectors derived internally —
+ * never user input. Used for storage backend detection and disk usage.
+ */
+const HOST_TOOL_ALLOWLIST = new Set(["df", "du", "btrfs"]);
+
 export interface RunLxcOptions {
   timeoutMs?: number;
   /** Append bounded stderr to failure messages (useful for create failures). */
@@ -67,6 +74,18 @@ function execFileStrict(
 /** Run an LXC binary. The command must be allowlisted; args are never shelled. */
 export function runLxc(cmd: string, args: string[], opts: RunLxcOptions = {}): Promise<{ stdout: string; stderr: string }> {
   if (!LXC_ALLOWLIST.has(cmd)) {
+    return Promise.reject(new ProviderError("COMMAND_NOT_ALLOWED", `Command is not allowlisted: ${cmd}.`, 400));
+  }
+  return execFileStrict(cmd, args, opts.timeoutMs ?? TIMEOUT_MS, opts.includeStderr ?? false);
+}
+
+/**
+ * Run a read-only host inspection tool (df/du/btrfs). Same strict execution
+ * as runLxc. Callers must only pass internally derived fixed argument
+ * vectors — never anything influenced by user input.
+ */
+export function runHostTool(cmd: string, args: string[], opts: RunLxcOptions = {}): Promise<{ stdout: string; stderr: string }> {
+  if (!HOST_TOOL_ALLOWLIST.has(cmd)) {
     return Promise.reject(new ProviderError("COMMAND_NOT_ALLOWED", `Command is not allowlisted: ${cmd}.`, 400));
   }
   return execFileStrict(cmd, args, opts.timeoutMs ?? TIMEOUT_MS, opts.includeStderr ?? false);
@@ -190,6 +209,7 @@ export interface HostCapabilities {
   bridgePresent: boolean | null;
   ipForwarding: boolean | null;
   runtimeUid: number | null;
+  lxcfsActive: boolean;
 }
 
 const RESTRICTED_GUESTS = new Set(["docker", "lxc", "lxd", "openvz", "podman", "container"]);
@@ -236,6 +256,27 @@ export function classifyCgroup(hasV2Controllers: boolean, hasV1Controllers: bool
   return "none";
 }
 
+/**
+ * True when the LXCFS FUSE filesystem is mounted on this host. Pure parser
+ * over mount-table text so it is unit-testable; the live check reads
+ * /proc/mounts (falling back to /proc/self/mountinfo).
+ */
+export function parseMountsForLxcfs(mountsText: string): boolean {
+  return /(^|\s)lxcfs\s/.test(mountsText);
+}
+
+export function detectLxcfsActive(): boolean {
+  const mounts = safeRead("/proc/mounts", 65536) ?? safeRead("/proc/self/mountinfo", 65536) ?? "";
+  if (!parseMountsForLxcfs(mounts)) return false;
+  // A stale mount entry alone is not proof: the FUSE view must be servable.
+  try {
+    const entries = fs.readdirSync("/var/lib/lxcfs");
+    return entries.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function safeExists(p: string): boolean {
   try {
     return fs.existsSync(p);
@@ -267,6 +308,7 @@ export async function getHostCapabilities(): Promise<HostCapabilities> {
       bridgePresent: null,
       ipForwarding: null,
       runtimeUid: null,
+      lxcfsActive: false,
     };
   }
 }
@@ -334,6 +376,7 @@ async function collectHostCapabilities(): Promise<HostCapabilities> {
     bridgePresent,
     ipForwarding: ipfwd === "1" ? true : ipfwd === "0" ? false : null,
     runtimeUid,
+    lxcfsActive: detectLxcfsActive(),
   };
 }
 

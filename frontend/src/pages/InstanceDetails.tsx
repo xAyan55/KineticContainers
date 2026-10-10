@@ -407,11 +407,22 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
     effective: {
       cpu: number | null;
       memoryMb: number | null;
+      cpuset: string | null;
+      cpusetCpus: number | null;
+      cpuModel: string;
       storageGb: null;
       storageEnforced: false;
       storageNote: string;
       cgroupVersion: string;
     };
+    storage: {
+      backend: string;
+      quotaSupported: boolean;
+      quotaGb: number | null;
+      usedGb: number | null;
+      note: string;
+    } | null;
+    lxcfs: { active: boolean } | null;
   }>(null);
   const [error, setError] = React.useState<string | undefined>();
   const [cpu, setCpu] = React.useState(String(i.cpu));
@@ -426,11 +437,22 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
         effective: {
           cpu: number | null;
           memoryMb: number | null;
+          cpuset: string | null;
+          cpusetCpus: number | null;
+          cpuModel: string;
           storageGb: null;
           storageEnforced: false;
           storageNote: string;
           cgroupVersion: string;
         };
+        storage: {
+          backend: string;
+          quotaSupported: boolean;
+          quotaGb: number | null;
+          usedGb: number | null;
+          note: string;
+        } | null;
+        lxcfs: { active: boolean } | null;
       }>(`/api/instances/${i.id}/config`);
       setConfig(data);
       setError(undefined);
@@ -496,6 +518,15 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
                   <td className="text-muted">{config.effective.cpu !== null ? `${config.effective.cpu} vCPU (cgroup ${config.effective.cgroupVersion})` : "Unavailable"}</td>
                 </tr>
                 <tr>
+                  <td className="text-primary">CPU visibility</td>
+                  <td className="text-muted">{config.configured.cpu} vCPU</td>
+                  <td className="text-muted">
+                    {config.effective.cpuset !== null
+                      ? `cpuset ${config.effective.cpuset} (${config.effective.cpusetCpus ?? "?"} visible) — shared set, not dedicated cores`
+                      : "Unavailable"}
+                  </td>
+                </tr>
+                <tr>
                   <td className="text-primary">Memory</td>
                   <td className="text-muted">{config.configured.memory_mb} MB</td>
                   <td className="text-muted">{config.effective.memoryMb !== null ? `${config.effective.memoryMb} MB (cgroup ${config.effective.cgroupVersion})` : "Unavailable"}</td>
@@ -503,7 +534,20 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
                 <tr>
                   <td className="text-primary">Disk</td>
                   <td className="text-muted">{config.configured.storage_gb} GB (recorded)</td>
-                  <td className="text-muted">Not enforced — {config.effective.storageNote}</td>
+                  <td className="text-muted">
+                    {!config.storage
+                      ? "Unavailable"
+                      : config.storage.quotaSupported && config.storage.quotaGb !== null
+                        ? `${config.storage.quotaGb} GB quota enforced (${config.storage.backend}, ${config.storage.usedGb ?? "?"} GB used)`
+                        : `${config.storage.backend} backend — no quota. ${config.storage.usedGb !== null ? `${config.storage.usedGb} GB used. ` : ""}${config.storage.note}`}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="text-primary">LXCFS views</td>
+                  <td className="text-muted">Container-aware /proc + /sys</td>
+                  <td className="text-muted">
+                    {config.lxcfs === null ? "Unavailable" : config.lxcfs.active ? "Active in guest" : "Not mounted in guest"}
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -532,7 +576,117 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
           </div>
         </form>
       </Card>
+      <RepairCard instanceId={i.id} onRepaired={() => { void loadConfig(); onRefresh(); }} />
     </div>
+  );
+}
+
+interface RepairPlanCheck {
+  check: string;
+  status: "ok" | "needs-fix" | "unsupported";
+  detail: string;
+}
+
+interface RepairPlan {
+  containerId: string;
+  exists: boolean;
+  checks: RepairPlanCheck[];
+  restartNeeded: boolean;
+  warnings: string[];
+}
+
+interface RepairReport {
+  containerId: string;
+  backupPath: string | null;
+  checks: { check: string; status: string; detail: string }[];
+  restartNeeded: boolean;
+  warnings: string[];
+}
+
+function RepairCard({ instanceId, onRepaired }: { instanceId: string; onRepaired: () => void }): React.JSX.Element {
+  const [plan, setPlan] = React.useState<RepairPlan | null>(null);
+  const [report, setReport] = React.useState<RepairReport | null>(null);
+  const [error, setError] = React.useState<string | undefined>();
+  const [busy, setBusy] = React.useState(false);
+
+  const loadPlan = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const data = await api.get<{ plan: RepairPlan }>(`/api/instances/${instanceId}/repair`);
+      setPlan(data.plan);
+      setReport(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Unable to compute repair plan.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const apply = async (): Promise<void> => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const data = await api.post<{ report: RepairReport }>(`/api/instances/${instanceId}/repair`);
+      setReport(data.report);
+      onRepaired();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Repair failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <h2 className="mb-1 text-sm font-semibold text-primary">Repair drift</h2>
+      <p className="mb-4 text-xs text-muted">
+        Compares this VPS against the host and fixes drift (limits, affinity set, LXCFS include, btrfs quota).
+        Config is backed up once before any change; containers are never recreated or migrated.
+      </p>
+      <InlineAlert message={error} />
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="ghost" onClick={() => void loadPlan()} disabled={busy}>
+          {busy ? "Working…" : "Check for drift"}
+        </Button>
+        {plan && plan.exists ? (
+          <Button type="button" onClick={() => void apply()} disabled={busy}>
+            {busy ? "Repairing…" : "Apply repair"}
+          </Button>
+        ) : null}
+      </div>
+      {plan ? (
+        <ul className="mt-4 flex flex-col gap-1.5">
+          {plan.checks.map((c) => (
+            <li key={c.check} className="flex items-start justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
+              <span className="font-mono text-xs text-muted">{c.check}</span>
+              <span className="flex-1 text-muted">{c.detail}</span>
+              <StatusBadge status={c.status === "needs-fix" ? "unknown" : c.status === "ok" ? "active" : "disabled"} />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {plan && !plan.exists ? (
+        <p className="mt-3 text-sm text-muted">The container is missing on the host — recreate it instead of repairing.</p>
+      ) : null}
+      {report ? (
+        <div className="mt-4">
+          <p className="mb-2 text-xs text-muted">
+            Repair applied{report.backupPath ? ` (config backup: ${report.backupPath})` : ""}.
+            {report.restartNeeded ? " A container restart is required for all changes to take effect." : ""}
+          </p>
+          <ul className="flex flex-col gap-1.5">
+            {report.checks.map((c) => (
+              <li key={c.check} className="flex items-start justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
+                <span className="font-mono text-xs text-muted">{c.check}</span>
+                <span className="flex-1 text-muted">{c.detail}</span>
+                <StatusBadge status={c.status === "fixed" ? "active" : c.status === "ok" ? "active" : c.status === "failed" ? "error" : "disabled"} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </Card>
   );
 }
 

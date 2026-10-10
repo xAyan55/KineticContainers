@@ -19,6 +19,9 @@
 #       --setup-lxc-only  Only configure LXC on this host for an EXISTING
 #                         installation. Never touches .env, the database,
 #                         users, or service config. Requires root.
+#       --repair          Repair drift on EXISTING managed VPS (re-apply
+#                         limits, LXCFS include, btrfs quotas). Never touches
+#                         .env, users, settings, ports, or service config.
 #       --probe           Run a full create/start/stop/destroy probe container
 #                         during verification (default in --setup-lxc-only).
 #       --start           Start the server in the foreground when finished.
@@ -43,9 +46,10 @@ YES=0
 NON_INTERACTIVE=0
 NO_SERVICE=0
 SYS_DEPS=1
-SKIP_LXC=0
-SETUP_LXC_ONLY=0
-PROBE=0
+  SKIP_LXC=0
+  SETUP_LXC_ONLY=0
+  REPAIR=0
+  PROBE=0
 SERVICE="${SERVICE:-}"
 START_NOW=0
 INSTALL_DIR="${INSTALL_DIR:-$HOME/KineticContainers}"
@@ -76,6 +80,7 @@ while [ $# -gt 0 ]; do
     --no-system-deps) SYS_DEPS=0; shift ;;
     --skip-lxc) SKIP_LXC=1; shift ;;
     --setup-lxc-only) SETUP_LXC_ONLY=1; shift ;;
+    --repair) REPAIR=1; shift ;;
     --probe) PROBE=1; shift ;;
     --start) START_NOW=1; shift ;;
     --dir) INSTALL_DIR="$2"; shift 2 ;;
@@ -217,6 +222,9 @@ LXC_CGROUP="none"
 LXC_BRIDGE="absent"
 LXC_IPFWD="unknown"
 LXC_HAS_LXC=0
+LXCFS_STATUS="pending"
+LXCFS_DETAIL=""
+LXCFS_CONTAINER="pending"
 KCT_NODE_STATUS="unknown"
 KCT_NODE_DETAIL=""
 
@@ -335,6 +343,55 @@ setup_lxc_network() {
   return 1
 }
 
+# LXCFS gives containers correct /proc/meminfo, /proc/cpuinfo, /proc/stat,
+# /proc/uptime, /proc/swaps and /sys/devices/system/cpu/online views.
+# Best effort: a missing/broken LXCFS never fails the whole setup, it is
+# reported as unverified with the reason.
+setup_lxcfs() {
+  LXCFS_STATUS="unverified"
+  if ! command -v lxcfs >/dev/null 2>&1; then
+    if [ "${PKG_MGR:-}" = "apt" ] || { detect_pkg_mgr && [ "$PKG_MGR" = "apt" ]; }; then
+      info "Installing the lxcfs package for container-aware resource views ..."
+      if ! pkg_install lxcfs; then
+        LXCFS_DETAIL="lxcfs package installation failed"
+        warn "${LXCFS_DETAIL}."
+        return 1
+      fi
+      hash -r 2>/dev/null || true
+    else
+      LXCFS_DETAIL="lxcfs not installed and no supported package manager to install it (needs the 'lxcfs' package)"
+      warn "${LXCFS_DETAIL}."
+      return 1
+    fi
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    if [ -f /lib/systemd/system/lxcfs.service ] || [ -f /etc/systemd/system/lxcfs.service ]; then
+      if ! run_root systemctl enable --now lxcfs >/dev/null 2>&1; then
+        warn "Could not start the lxcfs service."
+      fi
+      sleep 2
+    else
+      warn "lxcfs installed but no systemd unit found; cannot ensure it runs."
+    fi
+  else
+    warn "No systemd here; cannot ensure the lxcfs daemon runs."
+  fi
+  if ! kct_lxcfs_serving; then
+    LXCFS_DETAIL="lxcfs FUSE view is not mounted/serving (/var/lib/lxcfs)"
+    warn "${LXCFS_DETAIL}."
+    return 1
+  fi
+  if ! kct_lxcfs_include_present; then
+    LXCFS_DETAIL="lxcfs serves, but the distro integration file is missing (/usr/share/lxc/config/common.conf.d/00-lxcfs.conf)"
+    warn "${LXCFS_DETAIL}."
+    return 1
+  fi
+  LXCFS_STATUS="ok"
+  LXC_EVIDENCE="${LXC_EVIDENCE}lxcfs: serving, integration file present$(printf '\n')"
+  info "LXCFS is serving container-aware resource views."
+  return 0
+}
+
 # KineticCT uses classic LXC (lxc-ls, lxc-create, ...). There is intentionally
 # NO `lxc` binary: `lxc list` is LXD/Incus syntax and its absence proves
 # nothing about this setup. Every binary below is checked by name; the core
@@ -415,7 +472,7 @@ run_lxc_probe() {
     lxc-destroy -f -n "$name" >/dev/null 2>&1 || true
     return 1
   fi
-  local i state=""
+  local i state="" probe_pid=""
   for i in $(seq 1 30); do
     state="$(lxc-info -n "$name" -sH 2>/dev/null || true)"
     if [ "$state" = "RUNNING" ]; then break; fi
@@ -425,6 +482,20 @@ run_lxc_probe() {
     LXC_DETAIL="probe container never reached RUNNING"
     lxc-destroy -f -n "$name" >/dev/null 2>&1 || true
     return 1
+  fi
+  # While it runs: verify LXCFS overlays are really mounted inside the guest.
+  # Non-fatal — recorded separately from the create/start/stop/destroy result.
+  LXCFS_CONTAINER="unverified"
+  probe_pid="$(lxc-info -n "$name" -pH 2>/dev/null | grep -Eo '[0-9]+' | head -n 1 || true)"
+  if [ -n "${probe_pid:-}" ] && [ -r "/proc/${probe_pid}/mountinfo" ]; then
+    if grep -qE '(^|[[:space:]])lxcfs[[:space:]]' "/proc/${probe_pid}/mountinfo" 2>/dev/null; then
+      LXCFS_CONTAINER="ok"
+      info "Probe container has LXCFS overlays mounted."
+    else
+      warn "Probe container is missing LXCFS overlays (guest will see host resource info)."
+    fi
+  else
+    warn "Could not inspect the probe container mounts."
   fi
   if ! lxc-stop -n "$name" >/dev/null 2>&1; then
     LXC_DETAIL="probe container would not stop cleanly"
@@ -483,6 +554,9 @@ setup_lxc_host() { # $1 = install|setup-only
   if [ "$ruser" != "root" ]; then
     if ! ensure_subid "$ruser" /etc/subuid; then warn "Could not ensure /etc/subuid for $ruser."; fi
     if ! ensure_subid "$ruser" /etc/subgid; then warn "Could not ensure /etc/subgid for $ruser."; fi
+  fi
+  if ! setup_lxcfs; then
+    info "Continuing without verified LXCFS views (guests will see host resource info)."
   fi
   if [ ! -f /etc/lxc/default.conf ]; then
     warn "No /etc/lxc/default.conf found; container creation may need explicit configuration."
@@ -604,7 +678,12 @@ print_lxc_report() {
   say "LXC setup report"
   info "Packages:  ${LXC_PACKAGES}"
   info "Network:   ${LXC_NET}"
-  info "Probe:     ${LXC_PROBE}"
+  info "LXCFS:     ${LXCFS_STATUS}${LXCFS_DETAIL:+ — $LXCFS_DETAIL}"
+  if [ "$LXCFS_CONTAINER" != "pending" ]; then
+    info "Probe:     ${LXC_PROBE} (guest LXCFS mounts: $LXCFS_CONTAINER)"
+  else
+    info "Probe:     ${LXC_PROBE}"
+  fi
   info "Status:    ${LXC_STATUS}${LXC_DETAIL:+ — $LXC_DETAIL}"
   if [ -n "$LXC_EVIDENCE" ]; then
     info "Verified tooling (classic LXC — note: there is no \`lxc\` binary; \`lxc list\` is LXD syntax):"
@@ -612,6 +691,59 @@ print_lxc_report() {
       [ -n "$line" ] && printf '    %s\n' "$line"
     done || true
   fi
+  return 0
+}
+
+# Repair mode for EXISTING installations: reconcile every managed VPS on the
+# local node (re-apply drifted limits, LXCFS include, btrfs quotas).
+# Never touches .env, users, settings, ports, service config, unrelated
+# containers, storage layouts, or firewall rules. Never destroys/recreates.
+repair_vps_only() {
+  say "VPS repair mode — existing installation at $REPO_ROOT"
+  say "This reconciles managed containers only. Nothing else is modified."
+  require_lxc_root die
+  if [ ! -f "$REPO_ROOT/server/package.json" ]; then
+    die "Not a KineticCT checkout: $REPO_ROOT"
+  fi
+  if [ ! -d "$REPO_ROOT/server/node_modules" ]; then
+    die "Backend dependencies are missing — run update.sh (or install.sh) first, then re-run --repair."
+  fi
+  if [ ! -f "$REPO_ROOT/server/dist/db.js" ]; then
+    say "Building the backend (build output only; no data touched) ..."
+    (cd "$REPO_ROOT" && npm run build --workspace=server) || die "Backend build failed."
+  fi
+  local tmp out rc=0
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'EOF'
+const path = require("path");
+const dotenv = require("dotenv");
+dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
+dotenv.config();
+(async () => {
+  const dbm = require("./dist/db.js");
+  const agent = require("./dist/services/virtualization/localAgent.js");
+  const db = dbm.getDb();
+  const { repaired, checkedAt } = await agent.repairLocalInstances(db);
+  console.log(JSON.stringify({ checkedAt, repaired }));
+})().catch((e) => { console.error("KCT_ERROR=" + ((e && e.message) || e)); process.exit(1); });
+EOF
+  out="$(cd "$REPO_ROOT/server" && node "$tmp" 2>&1)" || rc=$?
+  rm -f "$tmp"
+  if [ "$rc" -ne 0 ]; then
+    warn "Repair run failed:"
+    printf '%s\n' "$out" | head -10 || true
+    return 1
+  fi
+  if command -v node >/dev/null 2>&1; then
+    printf '%s\n' "$out" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const r=JSON.parse(s);let bad=0;for(const v of r.repaired){const fails=v.checks.filter(c=>c.status==='failed');if(fails.length>0)bad++;console.log('- '+v.containerId);for(const c of v.checks)console.log('    ['+c.status+'] '+c.check+': '+c.detail);}console.log('checked '+r.repaired.length+' instance(s) at '+r.checkedAt);process.exit(bad>0?1:0);}catch(e){console.error('unparseable repair output');process.exit(1);}});" || rc=$?
+  else
+    printf '%s\n' "$out"
+  fi
+  if [ "$rc" -ne 0 ]; then
+    warn "Repair completed with failures (details above). Rerun after addressing them."
+    return 1
+  fi
+  say "Repair pass complete — see per-instance results above."
   return 0
 }
 
@@ -664,6 +796,7 @@ if [ ! -f "server/package.json" ] || [ ! -f "frontend/package.json" ]; then
   [ "$SYS_DEPS" -eq 0 ] && set -- "$@" --no-system-deps
   [ "$SKIP_LXC" -eq 1 ] && set -- "$@" --skip-lxc
   [ "$SETUP_LXC_ONLY" -eq 1 ] && set -- "$@" --setup-lxc-only
+  [ "$REPAIR" -eq 1 ] && set -- "$@" --repair
   [ "$PROBE" -eq 1 ] && set -- "$@" --probe
   # Run from inside the fresh checkout, otherwise the check above fails again.
   cd "$INSTALL_DIR" || die "Cannot enter install directory: $INSTALL_DIR"
@@ -684,6 +817,13 @@ fi
 # Setup-only mode exits here: host LXC work only, never a fresh install.
 if [ "$SETUP_LXC_ONLY" -eq 1 ]; then
   setup_lxc_only
+  exit $?
+fi
+
+# Repair mode exits here: reconcile existing VPS configs only. Never touches
+# .env, users, settings, ports, service config, or unrelated containers.
+if [ "$REPAIR" -eq 1 ]; then
+  repair_vps_only
   exit $?
 fi
 

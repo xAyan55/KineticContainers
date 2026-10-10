@@ -133,6 +133,26 @@ kct_template_present() { # rc 0 when the download template script exists
   [ -f "$(kct_path /usr/share/lxc/templates/lxc-download)" ]
 }
 
+kct_lxcfs_mounted() { # rc 0 when an lxcfs mount is visible in the mount table
+  local mounts
+  mounts="$(cat "$(kct_path /proc/mounts)" 2>/dev/null || true)"
+  [ -z "$mounts" ] && mounts="$(cat "$(kct_path /proc/self/mountinfo)" 2>/dev/null || true)"
+  printf '%s' "$mounts" | grep -qE '(^|[[:space:]])lxcfs[[:space:]]'
+}
+
+kct_lxcfs_serving() { # rc 0 when the FUSE view is mounted AND servable
+  kct_lxcfs_mounted || return 1
+  local dir
+  dir="$(kct_path /var/lib/lxcfs)"
+  [ -d "$dir" ] || return 1
+  [ -n "$(ls -A "$dir" 2>/dev/null)" ] || return 1
+  return 0
+}
+
+kct_lxcfs_include_present() { # rc 0 when the distro integration file exists
+  [ -f "$(kct_path /usr/share/lxc/config/common.conf.d/00-lxcfs.conf)" ]
+}
+
 # ---------------------------------------------------------------------------
 # self-test (fixtures only — safe to run anywhere, mutates nothing)
 # ---------------------------------------------------------------------------
@@ -259,6 +279,23 @@ EOF
   kct_assert_rc "template present" 0 kct_template_present
   rm -f "$root/usr/share/lxc/templates/lxc-download"
   kct_assert_rc "template absent" 1 kct_template_present
+
+  # --- lxcfs detection (fixture mount tables) ---
+  mkdir -p "$root/proc" "$root/var/lib/lxcfs" "$root/usr/share/lxc/config/common.conf.d"
+  printf 'sysfs /sys sysfs rw 0 0\nlxcfs /var/lib/lxcfs fuse.lxcfs rw 0 0\n' > "$root/proc/mounts"
+  : > "$root/var/lib/lxcfs/meminfo"
+  kct_assert_rc "lxcfs mounted+serving" 0 kct_lxcfs_serving
+  rm -f "$root/var/lib/lxcfs/meminfo"
+  kct_assert_rc "lxcfs empty view dir" 1 kct_lxcfs_serving
+  : > "$root/var/lib/lxcfs/meminfo"
+  printf 'sysfs /sys sysfs rw 0 0\n' > "$root/proc/mounts"
+  kct_assert_rc "lxcfs mount gone" 1 kct_lxcfs_serving
+  rm -f "$root/proc/mounts"
+  kct_assert_rc "lxcfs no mount table" 1 kct_lxcfs_serving
+  : > "$root/usr/share/lxc/config/common.conf.d/00-lxcfs.conf"
+  kct_assert_rc "lxcfs include present" 0 kct_lxcfs_include_present
+  rm -f "$root/usr/share/lxc/config/common.conf.d/00-lxcfs.conf"
+  kct_assert_rc "lxcfs include absent" 1 kct_lxcfs_include_present
 
   rm -rf "$root"
   unset KCT_ROOT

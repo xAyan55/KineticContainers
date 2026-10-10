@@ -12,11 +12,22 @@ import {
   templateImage,
   downloadArch,
   buildCgroupConfig,
+  parseCpusetCount,
   parseEffectiveLimits,
   parseLxcInfo,
   parseLxcMetrics,
+  parseDfFstype,
+  parseBtrfsSubvolId,
+  parseBtrfsQgroupLimit,
+  sanitizeMetric,
+  lxcfsIncludePresent,
+  planInstanceRepair,
+  checkHostCapacity,
   applyResourceLimits,
   readEffectiveConfig,
+  planInstanceRepair,
+  checkHostCapacity,
+  RESOURCE_MODEL,
 } from "../src/services/virtualization/localAgent.js";
 import { authorizeConsole, __setPtyForTests } from "../src/services/virtualization/console.js";
 import { attachConsoleGateway } from "../src/services/virtualization/console.js";
@@ -86,27 +97,54 @@ describe("template and arch mapping", () => {
 });
 
 describe("cgroup resource config", () => {
-  it("builds exact v1 hard-cap lines", () => {
-    expect(buildCgroupConfig("v1", { cpu: 2, memoryMb: 2048 })).toEqual([
+  it("builds exact v1 hard-cap lines with a shared affinity set", () => {
+    expect(buildCgroupConfig("v1", { cpu: 2, memoryMb: 2048 }, 8)).toEqual([
       "lxc.cgroup.cpu.cfs_period_us = 100000",
       "lxc.cgroup.cpu.cfs_quota_us = 200000",
       "lxc.cgroup.memory.limit_in_bytes = 2147483648",
+      "lxc.cgroup.cpuset.cpus = 0-1",
     ]);
   });
 
-  it("builds exact v2 hard-cap lines", () => {
-    expect(buildCgroupConfig("v2", { cpu: 2, memoryMb: 2048 })).toEqual([
+  it("builds exact v2 hard-cap lines with a shared affinity set", () => {
+    expect(buildCgroupConfig("v2", { cpu: 2, memoryMb: 2048 }, 8)).toEqual([
       "lxc.cgroup2.cpu.max = 200000 100000",
       "lxc.cgroup2.memory.max = 2147483648",
+      "lxc.cgroup2.cpuset.cpus = 0-1",
     ]);
+  });
+
+  it("clamps the affinity set to the host and never claims dedication", () => {
+    expect(buildCgroupConfig("v2", { cpu: 1, memoryMb: 512 }, 8)).toContain("lxc.cgroup2.cpuset.cpus = 0");
+    // 32 vCPU requested on a 4-CPU host: quota stays honest, set spans the host.
+    expect(buildCgroupConfig("v2", { cpu: 32, memoryMb: 512 }, 4)).toContain("lxc.cgroup2.cpuset.cpus = 0-3");
+    // Unknown host CPU count: quota/memory still enforced, no invented cpuset.
+    expect(buildCgroupConfig("v2", { cpu: 2, memoryMb: 512 }, 0)).toHaveLength(2);
+    expect(RESOURCE_MODEL).toMatch(/never exclusively reserved/);
   });
 
   it("round-trips limits through parse", () => {
-    const v2 = buildCgroupConfig("v2", { cpu: 4, memoryMb: 4096 }).join("\n");
-    expect(parseEffectiveLimits(`lxc.net.0.type = veth\n${v2}\n`, "v2")).toEqual({ cpu: 4, memoryMb: 4096 });
-    const v1 = buildCgroupConfig("v1", { cpu: 1, memoryMb: 512 }).join("\n");
-    expect(parseEffectiveLimits(v1, "v1")).toEqual({ cpu: 1, memoryMb: 512 });
-    expect(parseEffectiveLimits("# empty config\n", "v2")).toEqual({ cpu: null, memoryMb: null });
+    const v2 = buildCgroupConfig("v2", { cpu: 4, memoryMb: 4096 }, 8).join("\n");
+    expect(parseEffectiveLimits(`lxc.net.0.type = veth\n${v2}\n`, "v2")).toEqual({
+      cpu: 4,
+      memoryMb: 4096,
+      cpuset: "0-3",
+      cpusetCpus: 4,
+    });
+    const v1 = buildCgroupConfig("v1", { cpu: 1, memoryMb: 512 }, 8).join("\n");
+    expect(parseEffectiveLimits(v1, "v1")).toEqual({ cpu: 1, memoryMb: 512, cpuset: "0", cpusetCpus: 1 });
+    expect(parseEffectiveLimits("# empty config\n", "v2")).toEqual({ cpu: null, memoryMb: null, cpuset: null, cpusetCpus: null });
+  });
+
+  it("counts cpuset specs without inventing counts", () => {
+    expect(parseCpusetCount("0-3")).toBe(4);
+    expect(parseCpusetCount("0,2")).toBe(2);
+    expect(parseCpusetCount("0")).toBe(1);
+    expect(parseCpusetCount("0-1,3,5-6")).toBe(5);
+    expect(parseCpusetCount(null)).toBeNull();
+    expect(parseCpusetCount("")).toBeNull();
+    expect(parseCpusetCount("abc")).toBeNull();
+    expect(parseCpusetCount("3-1")).toBeNull();
   });
 
   it("writes and reads back real config files without touching other keys", async () => {
@@ -175,6 +213,104 @@ CPU use:        12.34 seconds
   it("parses live metrics with unit conversion", () => {
     expect(parseLxcMetrics(SAMPLE)).toEqual({ cpuSeconds: 12.34, memoryMb: 96.5 });
     expect(parseLxcMetrics("Name: x\n")).toEqual({ cpuSeconds: null, memoryMb: null });
+  });
+
+  it("never echoes absurd metric values (regression: billion-GiB garbage)", () => {
+    // Values resembling unlimited-cgroup artifacts must not survive.
+    expect(sanitizeMetric(2915679709.81 * 1024, 32768)).toBeNull();
+    expect(sanitizeMetric(Number.MAX_SAFE_INTEGER, 32768)).toBeNull();
+    expect(sanitizeMetric(-5, 32768)).toBeNull();
+    expect(sanitizeMetric(NaN, 32768)).toBeNull();
+    expect(sanitizeMetric(Infinity, null)).toBeNull();
+    expect(sanitizeMetric(null, 32768)).toBeNull();
+    // Sane values pass through untouched, including exact-boundary ones.
+    expect(sanitizeMetric(96.5, 32768)).toBe(96.5);
+    expect(sanitizeMetric(32768, 32768)).toBe(32768);
+    expect(sanitizeMetric(0, 32768)).toBe(0);
+    // Without a known ceiling only finiteness/sign are enforced.
+    expect(sanitizeMetric(123.4, null)).toBe(123.4);
+  });
+});
+
+describe("storage backend detection", () => {
+  const DF_BTRFS = `Filesystem     Type 1024-blocks      Used Available Capacity Mounted on
+/dev/sda1      btrfs  104857600  20971520  83886080      20% /var/lib/lxc
+`;
+  const DF_EXT4 = `Filesystem     Type 1024-blocks      Used Available Capacity Mounted on
+/dev/sda1      ext4  104857600  20971520  83886080      20% /
+`;
+
+  it("reads the filesystem type from df output", () => {
+    expect(parseDfFstype(DF_BTRFS, "/var/lib/lxc")).toBe("btrfs");
+    expect(parseDfFstype(DF_EXT4, "/")).toBe("ext4");
+    expect(parseDfFstype("", "/")).toBeNull();
+    expect(parseDfFstype("Filesystem\n", "/")).toBeNull();
+  });
+
+  it("extracts btrfs subvolume ids", () => {
+    expect(parseBtrfsSubvolId("UUID: abc\nSubvolume ID: 257\n")).toBe("257");
+    expect(parseBtrfsSubvolId("no id here\n")).toBeNull();
+  });
+
+  it("reads btrfs qgroup limits and rejects unlimited/garbage", () => {
+    const out = `qgroupid         rfer         excl     max_rfer     max_excl
+--------         ----         ----     --------     --------
+0/257        1.00GiB      1.00GiB    20.00GiB         none
+0/258        2.00GiB      2.00GiB         none         none
+`;
+    // Numeric byte limits are returned; "none" (unlimited) is not a capacity.
+    expect(parseBtrfsQgroupLimit("qgroupid rfer excl max_rfer max_excl\n0/257 100 100 21474836480 0\n", "0/257")).toBe(
+      21474836480
+    );
+    expect(parseBtrfsQgroupLimit(out, "0/258")).toBeNull();
+    expect(parseBtrfsQgroupLimit(out, "0/999")).toBeNull();
+    expect(parseBtrfsQgroupLimit("garbage\n", "0/257")).toBeNull();
+  });
+});
+
+describe("host capacity admission", () => {
+  it("refuses requests that provably exceed free capacity", () => {
+    expect(() =>
+      checkHostCapacity({ memoryTotalMb: 8192, memoryFreeMb: 100, diskAvailGb: 50 }, { memoryMb: 99999, storageGb: 10 })
+    ).toThrowError(/only 100 MB free/);
+    expect(() =>
+      checkHostCapacity({ memoryTotalMb: 8192, memoryFreeMb: 8000, diskAvailGb: 5 }, { memoryMb: 512, storageGb: 20 })
+    ).toThrowError(/only 5 GB free/);
+    try {
+      checkHostCapacity({ memoryTotalMb: 8192, memoryFreeMb: 100, diskAvailGb: 50 }, { memoryMb: 99999, storageGb: 10 });
+      expect.unreachable();
+    } catch (err) {
+      expect((err as ProviderError).code).toBe("INSUFFICIENT_CAPACITY");
+    }
+  });
+
+  it("passes when capacity suffices or is unknown", () => {
+    expect(() =>
+      checkHostCapacity({ memoryTotalMb: 8192, memoryFreeMb: 8000, diskAvailGb: 50 }, { memoryMb: 512, storageGb: 10 })
+    ).not.toThrow();
+    // Unknown readings never block provisioning.
+    expect(() =>
+      checkHostCapacity({ memoryTotalMb: 0, memoryFreeMb: 0, diskAvailGb: null }, { memoryMb: 512, storageGb: 10 })
+    ).not.toThrow();
+  });
+});
+
+describe("repair planning", () => {
+  it("reports a missing container without touching anything", async () => {
+    const plan = await planInstanceRepair("definitely-not-a-real-container", { cpu: 2, memoryMb: 1024, storageGb: 20 });
+    expect(plan.exists).toBe(false);
+    expect(plan.checks).toHaveLength(1);
+  });
+});
+
+describe("LXCFS include handling", () => {
+  it("detects the integration line exactly", () => {
+    expect(
+      lxcfsIncludePresent("lxc.include = /usr/share/lxc/config/common.conf.d/00-lxcfs.conf\n")
+    ).toBe(true);
+    expect(lxcfsIncludePresent("# lxc.include = /usr/share/lxc/config/common.conf.d/00-lxcfs.conf\n")).toBe(false);
+    expect(lxcfsIncludePresent("lxc.include = /usr/share/lxc/config/common.conf\n")).toBe(false);
+    expect(lxcfsIncludePresent("")).toBe(false);
   });
 });
 
@@ -254,6 +390,34 @@ describe("instance API honesty and isolation", () => {
     const res = await aliceAgent.patch(`/api/instances/${aliceInstance}/resources`).send({ storage_gb: 99 });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("STORAGE_IMMUTABLE");
+  });
+
+  it("rejects repair access across users and without a session", async () => {
+    const bobAgent = await login("bob@test.local", "BobPass12345");
+    expect((await bobAgent.get(`/api/instances/${aliceInstance}/repair`)).status).toBe(404);
+    expect((await bobAgent.post(`/api/instances/${aliceInstance}/repair`).send({})).status).toBe(404);
+    expect((await request(app).get(`/api/instances/${aliceInstance}/repair`)).status).toBe(401);
+    expect((await request(app).post(`/api/instances/${aliceInstance}/repair`).send({})).status).toBe(401);
+  });
+
+  it("reports an honest repair plan for a missing container", async () => {
+    const aliceAgent = await login("alice@test.local", "AlicePass12345");
+    // No LXC tooling on the test box: the container cannot exist on any host.
+    const plan = await aliceAgent.get(`/api/instances/${aliceInstance}/repair`);
+    expect(plan.status).toBe(200);
+    expect(plan.body.data.plan.exists).toBe(false);
+    const applied = await aliceAgent.post(`/api/instances/${aliceInstance}/repair`).send({});
+    expect(applied.status).toBe(200);
+    expect(applied.body.data.report.checks[0].status).toBe("failed");
+    // Nothing was modified: no backup, no drift.
+    const db = (await import("../src/db.js")).getDb();
+    const row = db.prepare("SELECT cpu, memory_mb FROM instances WHERE id = ?").get(aliceInstance) as {
+      cpu: number;
+      memory_mb: number;
+    };
+    expect(row.cpu).toBe(2);
+    expect(row.memory_mb).toBe(2048);
+    expect(applied.body.data.report.backupPath).toBeNull();
   });
 
   it("validates resource updates before touching the host", async () => {
