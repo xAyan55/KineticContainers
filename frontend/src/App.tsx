@@ -15,9 +15,11 @@ import { AdminCreatePage } from "@/pages/admin/Create";
 import { AdminSettingsPage } from "@/pages/admin/Settings";
 import { NotFoundPage } from "@/pages/NotFound";
 import { api } from "@/lib/api";
+import { setFavicon, useBranding } from "@/lib/branding";
 
 export function App(): React.JSX.Element {
   const [appName, setAppName] = React.useState("KineticCT");
+  const { faviconUrl } = useBranding();
 
   React.useEffect(() => {
     api.get<{ settings: Record<string, string> }>("/api/settings/public")
@@ -27,6 +29,10 @@ export function App(): React.JSX.Element {
       })
       .catch(() => undefined);
   }, []);
+
+  React.useEffect(() => {
+    setFavicon(faviconUrl || null);
+  }, [faviconUrl]);
 
   return (
     <BrowserRouter>

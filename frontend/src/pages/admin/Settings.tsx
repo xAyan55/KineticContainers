@@ -1,9 +1,122 @@
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { ApiError, api } from "@/lib/api";
+import { refreshBranding } from "@/lib/branding";
 import { Button, Card, InlineAlert, Input, Label, PageHeader, StatusBadge } from "@/components/ui/primitives";
 
 type SettingsMap = Record<string, string>;
+
+const LOGO_ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
+const FAVICON_ACCEPT = "image/png,image/jpeg,image/webp,image/gif,.ico,image/x-icon";
+const LOGO_MAX_BYTES = 1024 * 1024;
+const FAVICON_MAX_BYTES = 256 * 1024;
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Could not read the selected file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function BrandImageUploader({
+  kind,
+  label,
+  hint,
+  currentUrl,
+  onChanged,
+  onError,
+}: {
+  kind: "logo" | "favicon";
+  label: string;
+  hint: string;
+  currentUrl: string;
+  onChanged: (msg: string) => void;
+  onError: (msg: string) => void;
+}): React.JSX.Element {
+  const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [preview, setPreview] = React.useState<string | null>(null);
+  const maxBytes = kind === "logo" ? LOGO_MAX_BYTES : FAVICON_MAX_BYTES;
+
+  const pick = async (file: File | undefined): Promise<void> => {
+    if (!file) return;
+    if (file.size > maxBytes) {
+      onError(`${label} is too large (${Math.round(file.size / 1024)} KB, max ${Math.round(maxBytes / 1024)} KB).`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const dataUrl = await readAsDataUrl(file);
+      setPreview(dataUrl);
+      await api.post<{ logo_url: string; favicon_url: string }>("/api/settings/branding", {
+        [kind]: dataUrl,
+      });
+      if (inputRef.current) inputRef.current.value = "";
+      setPreview(null);
+      refreshBranding();
+      onChanged(`${label} updated.`);
+    } catch (err) {
+      setPreview(null);
+      onError(err instanceof ApiError ? err.message : `${label} upload failed.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await api.post("/api/settings/branding", { [kind]: null });
+      refreshBranding();
+      onChanged(`${label} removed.`);
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : `Could not remove ${label.toLowerCase()}.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const shown = preview ?? (currentUrl || null);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-4">
+        <span className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-raised" aria-hidden="true">
+          {shown ? (
+            <img src={shown} alt="" className="max-h-14 max-w-14 object-contain" draggable={false} />
+          ) : (
+            <ImagePlus className="h-5 w-5 text-muted" />
+          )}
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <p className="text-sm font-medium text-primary">{label}</p>
+          <p className="text-xs text-muted">{hint}</p>
+        </div>
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={kind === "logo" ? LOGO_ACCEPT : FAVICON_ACCEPT}
+        className="sr-only"
+        aria-label={`Choose a ${label.toLowerCase()} file`}
+        disabled={busy}
+        onChange={(e) => void pick(e.target.files?.[0])}
+      />
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="ghost" disabled={busy} onClick={() => inputRef.current?.click()}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Upload {label.toLowerCase()}…
+        </Button>
+        {currentUrl ? (
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => void remove()}>
+            <Trash2 className="h-4 w-4" aria-hidden="true" /> Remove
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 export function AdminSettingsPage(): React.JSX.Element {
   const [settings, setSettings] = React.useState<SettingsMap | null>(null);
@@ -84,7 +197,6 @@ export function AdminSettingsPage(): React.JSX.Element {
   };
 
   if (!settings) return <div><PageHeader title="Settings" /><p className="text-sm text-muted" role="status">Loading…</p><InlineAlert message={error} /></div>;
-
   return (
     <div>
       <PageHeader title="Settings" subtitle="Persisted to the database and applied immediately." />
@@ -120,6 +232,29 @@ export function AdminSettingsPage(): React.JSX.Element {
           <Button type="submit" disabled={saving}>{saving ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</> : "Save settings"}</Button>
         </div>
       </form>
+
+      <Card className="mt-5">
+        <h2 className="mb-1 text-sm font-semibold text-primary">Branding</h2>
+        <p className="mb-5 text-xs text-muted">Logo appears in the sidebar, header, and login page; the favicon appears in the browser tab. Raster images only (PNG, JPEG, WebP, GIF — plus ICO for favicons); SVG is rejected.</p>
+        <div className="grid gap-6 md:grid-cols-2">
+          <BrandImageUploader
+            kind="logo"
+            label="Logo"
+            hint="PNG, JPEG, WebP, or GIF up to 1 MB. Shown at small sizes; simple marks work best."
+            currentUrl={settings.logo_url ?? ""}
+            onChanged={(m) => { setMsg(m); void load(); }}
+            onError={(m) => setError(m)}
+          />
+          <BrandImageUploader
+            kind="favicon"
+            label="Favicon"
+            hint="PNG, JPEG, WebP, GIF, or ICO up to 256 KB. Square images render best."
+            currentUrl={settings.favicon_url ?? ""}
+            onChanged={(m) => { setMsg(m); void load(); }}
+            onError={(m) => setError(m)}
+          />
+        </div>
+      </Card>
 
       <Card className="mt-5">
         <h2 className="mb-3 text-sm font-semibold text-primary">Infrastructure</h2>

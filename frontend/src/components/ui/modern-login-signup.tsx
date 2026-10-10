@@ -1,6 +1,8 @@
 import * as React from "react";
-import { Eye, EyeOff, Loader2, Server } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { Button, FieldError, InlineAlert, Input, Label } from "@/components/ui/primitives";
+import { BrandMark } from "@/components/ui/brand-mark";
+import { useBranding } from "@/lib/branding";
 
 /**
  * Monochrome animated dot-grid background.
@@ -90,6 +92,7 @@ export function ModernLoginSignup({
   const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
   const [touched, setTouched] = React.useState(false);
+  const { logoUrl } = useBranding();
 
   const emailError = touched && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ? "Enter a valid email address." : undefined;
   const passwordError = touched && password.length < 1 ? "Enter your password." : undefined;
@@ -107,9 +110,7 @@ export function ModernLoginSignup({
       <main className="relative w-full max-w-sm">
         <div className="kct-card p-7">
           <div className="mb-6 flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-raised" aria-hidden="true">
-              <Server className="h-4 w-4 text-logo" />
-            </span>
+            <BrandMark logoUrl={logoUrl} label={`${appName} logo`} />
             <div>
               <p className="text-base font-semibold tracking-tight text-logo">{appName}</p>
               <p className="text-xs text-muted">Infrastructure control panel</p>

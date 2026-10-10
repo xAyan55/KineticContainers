@@ -1,7 +1,8 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Server } from "lucide-react";
 import { MobileSidebar, Sidebar, SidebarMenuButton } from "@/components/layout/Sidebar";
+import { BrandMark } from "@/components/ui/brand-mark";
+import { useBranding } from "@/lib/branding";
 
 const COLLAPSE_KEY = "kineticct.sidebar.collapsed";
 
@@ -16,6 +17,7 @@ function readCollapsed(): boolean {
 export function AppShell({ appName, children }: { appName: string; children: React.ReactNode }): React.JSX.Element {
   const [collapsed, setCollapsed] = React.useState<boolean>(readCollapsed);
   const [drawerOpen, setDrawerOpen] = React.useState(false);
+  const { logoUrl } = useBranding();
 
   const toggleCollapse = React.useCallback(() => {
     setCollapsed((prev) => {
@@ -37,16 +39,14 @@ export function AppShell({ appName, children }: { appName: string; children: Rea
         Skip to content
       </a>
       <div className="flex min-h-screen">
-        <Sidebar appName={appName} collapsed={collapsed} onToggleCollapse={toggleCollapse} />
-        <MobileSidebar appName={appName} open={drawerOpen} onClose={closeDrawer} />
+        <Sidebar appName={appName} logoUrl={logoUrl} collapsed={collapsed} onToggleCollapse={toggleCollapse} />
+        <MobileSidebar appName={appName} logoUrl={logoUrl} open={drawerOpen} onClose={closeDrawer} />
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-30 border-b border-border bg-surface lg:hidden">
             <div className="flex h-14 items-center gap-2 px-3">
               <SidebarMenuButton onClick={() => setDrawerOpen(true)} />
               <Link to="/" className="flex min-w-0 items-center gap-2.5" aria-label={`${appName} home`}>
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-raised" aria-hidden="true">
-                  <Server className="h-4 w-4 text-logo" />
-                </span>
+                <BrandMark logoUrl={logoUrl} label={`${appName} logo`} />
                 <span className="truncate text-sm font-semibold tracking-tight text-logo">{appName}</span>
               </Link>
             </div>

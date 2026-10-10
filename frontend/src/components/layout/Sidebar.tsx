@@ -9,7 +9,6 @@ import {
   Menu,
   Network,
   Plus,
-  Server,
   Settings,
   UserRound,
   Users,
@@ -19,6 +18,7 @@ import {
 import { useAuth } from "@/features/auth/AuthContext";
 import { avatarDataUri } from "@/lib/avatar";
 import { cn } from "@/lib/utils";
+import { BrandMark } from "@/components/ui/brand-mark";
 
 interface NavEntry {
   to: string;
@@ -96,6 +96,7 @@ function NavSection({
 
 function SidebarBody({
   appName,
+  logoUrl,
   collapsed,
   isAdmin,
   onToggleCollapse,
@@ -103,6 +104,7 @@ function SidebarBody({
   showToggle,
 }: {
   appName: string;
+  logoUrl?: string;
   collapsed: boolean;
   isAdmin: boolean;
   onToggleCollapse: () => void;
@@ -118,9 +120,7 @@ function SidebarBody({
           aria-label={`${appName} home`}
           className={cn("flex min-w-0 items-center gap-2.5", collapsed && "justify-center")}
         >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-raised" aria-hidden="true">
-            <Server className="h-4 w-4 text-logo" />
-          </span>
+          <BrandMark logoUrl={logoUrl} label={`${appName} logo`} />
           {collapsed ? null : <span className="truncate text-sm font-semibold tracking-tight text-logo">{appName}</span>}
         </Link>
         {showToggle ? (
@@ -246,10 +246,12 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
 
 export function Sidebar({
   appName,
+  logoUrl,
   collapsed,
   onToggleCollapse,
 }: {
   appName: string;
+  logoUrl?: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
 }): React.JSX.Element {
@@ -264,6 +266,7 @@ export function Sidebar({
     >
       <SidebarBody
         appName={appName}
+        logoUrl={logoUrl}
         collapsed={collapsed}
         isAdmin={user?.role === "admin"}
         onToggleCollapse={onToggleCollapse}
@@ -275,10 +278,12 @@ export function Sidebar({
 
 export function MobileSidebar({
   appName,
+  logoUrl,
   open,
   onClose,
 }: {
   appName: string;
+  logoUrl?: string;
   open: boolean;
   onClose: () => void;
 }): React.JSX.Element {
@@ -322,9 +327,7 @@ export function MobileSidebar({
       >
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
           <span className="flex items-center gap-2.5" aria-hidden="true">
-            <span className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-raised">
-              <Server className="h-4 w-4 text-logo" />
-            </span>
+            <BrandMark logoUrl={logoUrl} label={`${appName} logo`} />
             <span className="text-sm font-semibold tracking-tight text-logo">{appName}</span>
           </span>
           <button
@@ -338,7 +341,7 @@ export function MobileSidebar({
           </button>
         </div>
         <div className="min-h-0 flex-1">
-          <SidebarBody appName={appName} collapsed={false} isAdmin={user?.role === "admin"} onToggleCollapse={onClose} showToggle={false} onNavigate={onClose} />
+          <SidebarBody appName={appName} logoUrl={logoUrl} collapsed={false} isAdmin={user?.role === "admin"} onToggleCollapse={onClose} showToggle={false} onNavigate={onClose} />
         </div>
       </aside>
     </>

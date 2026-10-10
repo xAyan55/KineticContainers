@@ -21,6 +21,10 @@ export function createApp(): express.Express {
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
   app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+  // Brand-image uploads (base64 data URLs) legitimately exceed the default
+  // body cap. This path-scoped parser runs first and marks the body parsed,
+  // so the smaller global parser below skips these requests.
+  app.use("/api/settings/branding", express.json({ limit: "2mb" }));
   app.use(express.json({ limit: "256kb" }));
   app.use(cookieParser());
 

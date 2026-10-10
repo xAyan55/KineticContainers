@@ -33,9 +33,11 @@ Instance fields: `id, name, container_id, node_id, node_name, status, cpu, memor
 
 ## Settings
 
-- `GET /api/settings/public` (public) → safe subset incl. `app_name`, `page_title`, `registration_enabled`.
-- `GET /api/settings` (admin) → full managed set + `{ migration_version, app_version, node_version }`.
+- `GET /api/settings/public` (public) → safe subset incl. `app_name`, `page_title`, `registration_enabled`, plus `logo_url` / `favicon_url` ("" when unset).
+- `GET /api/settings` (admin) → full managed set + `logo_url` / `favicon_url` + `{ migration_version, app_version, node_version }`.
 - `PATCH /api/settings` (admin) → partial update; `registration_enabled` accepts boolean/string.
+- `POST /api/settings/branding` (admin, 2 MB JSON cap) → `{ logo?: dataURL|null, favicon?: dataURL|null }` → `{ logo_url, favicon_url }`. Raster images only (PNG/JPEG/WebP/GIF, +ICO for favicon; SVG rejected); magic bytes verified; logo ≤ 1 MB, favicon ≤ 256 KB; `null` clears. Stored as files, never in the DB.
+- `GET /api/settings/branding/logo|favicon` (public) → image bytes with `Content-Type`, long cache (URLs carry a mtime `?v=`); `404` when unset.
 
 ## Nodes (admin)
 
