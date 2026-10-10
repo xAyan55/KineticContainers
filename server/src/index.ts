@@ -7,15 +7,17 @@ dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
 dotenv.config();
 import { createApp, ensureSeedAdmin } from "./app.js";
 import { getDb } from "./db.js";
+import { attachConsoleGateway } from "./services/virtualization/console.js";
 
 async function main(): Promise<void> {
   getDb();
   await ensureSeedAdmin();
   const app = createApp();
   const port = Number(process.env.PORT ?? 8080);
-  app.listen(port, "127.0.0.1", () => {
+  const server = app.listen(port, "127.0.0.1", () => {
     console.info(`[kineticct] API listening on http://127.0.0.1:${port}`);
   });
+  attachConsoleGateway(server);
 }
 
 main().catch((err) => {

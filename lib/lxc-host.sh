@@ -116,9 +116,21 @@ kct_distro_supported() { # $1 = os id, $2 = id_like; rc 0 when apt-based LXC set
 
 kct_lxc_packages() { # $1 = package manager; prints the package list or rc 1
   case "${1:-}" in
-    apt) printf 'lxc uidmap libpam-cgfs bridge-utils dnsmasq-base squashfs-tools wget ca-certificates' ;;
+    apt) printf 'lxc uidmap libpam-cgfs bridge-utils dnsmasq-base squashfs-tools wget ca-certificates gnupg' ;;
     *) return 1 ;;
   esac
+}
+
+kct_bins_missing() { # $@ = command names; prints each missing one, one per line
+  local b
+  for b in "$@"; do
+    command -v "$b" >/dev/null 2>&1 || printf '%s\n' "$b"
+  done
+  return 0
+}
+
+kct_template_present() { # rc 0 when the download template script exists
+  [ -f "$(kct_path /usr/share/lxc/templates/lxc-download)" ]
 }
 
 # ---------------------------------------------------------------------------
@@ -235,9 +247,18 @@ EOF
   kct_assert_rc "fedora unsupported" 1 kct_distro_supported fedora ""
   kct_assert_rc "empty unsupported" 1 kct_distro_supported "" ""
   kct_assert_eq "apt packages" \
-    "lxc uidmap libpam-cgfs bridge-utils dnsmasq-base squashfs-tools wget ca-certificates" \
+    "lxc uidmap libpam-cgfs bridge-utils dnsmasq-base squashfs-tools wget ca-certificates gnupg" \
     "$(kct_lxc_packages apt)"
   kct_assert_rc "dnf packages unsupported" 1 kct_lxc_packages dnf
+
+  # --- binary + template presence (classic LXC names, not LXD `lxc`) ---
+  kct_assert_eq "no missing bins" "" "$(kct_bins_missing sh printf)"
+  kct_assert_eq "missing bin reported" "definitely-not-a-real-command" "$(kct_bins_missing sh definitely-not-a-real-command)"
+  mkdir -p "$root/usr/share/lxc/templates"
+  : > "$root/usr/share/lxc/templates/lxc-download"
+  kct_assert_rc "template present" 0 kct_template_present
+  rm -f "$root/usr/share/lxc/templates/lxc-download"
+  kct_assert_rc "template absent" 1 kct_template_present
 
   rm -rf "$root"
   unset KCT_ROOT

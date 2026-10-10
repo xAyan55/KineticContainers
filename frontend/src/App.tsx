@@ -5,6 +5,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { LoginPage } from "@/pages/Login";
 import { RegisterPage } from "@/pages/Register";
 import { DashboardPage } from "@/pages/Dashboard";
+import { InstanceDetailsPage } from "@/pages/InstanceDetails";
 import { ProfilePage } from "@/pages/Profile";
 import { AdminOverviewPage } from "@/pages/admin/Overview";
 import { AdminNodesPage } from "@/pages/admin/Nodes";
@@ -39,6 +40,16 @@ export function App(): React.JSX.Element {
               <RequireAuth>
                 <AppShell appName={appName}>
                   <DashboardPage />
+                </AppShell>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/instances/:id"
+            element={
+              <RequireAuth>
+                <AppShell appName={appName}>
+                  <InstanceDetailsPage />
                 </AppShell>
               </RequireAuth>
             }

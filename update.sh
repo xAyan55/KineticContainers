@@ -48,7 +48,7 @@ if ! npm install --no-audit --no-fund; then
   npm install --no-audit --no-fund || die "npm install failed."
 fi
 if npm approve-scripts --help >/dev/null 2>&1; then
-  npm approve-scripts argon2 better-sqlite3 esbuild >/dev/null 2>&1 || true
+  npm approve-scripts argon2 better-sqlite3 esbuild node-pty >/dev/null 2>&1 || true
   npm rebuild argon2 better-sqlite3 >/dev/null 2>&1 || true
 fi
 

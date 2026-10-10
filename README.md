@@ -57,6 +57,27 @@ Setup-only mode performs host LXC setup, runtime permission checks, a capability
 3. `Online` means LXC answered and inventory was readable; the details dialog shows host resources, a readiness checklist (tooling, nesting, userns, cgroup, bridge, forwarding), and the detected containers.
 4. `Unconfigured` means LXC is not installed — run the setup command above. `Error` with "Permission denied" means the backend user cannot execute the LXC tooling (run the panel as root or fix permissions; never add blanket `NOPASSWD: ALL` sudo rules).
 
+### Classic LXC vs LXD
+
+KineticCT uses **classic LXC** (`lxc-ls`, `lxc-info`, `lxc-create`, `lxc-start`, `lxc-stop`, `lxc-destroy`, `lxc-attach`), as shipped by Debian 13 in the `lxc` package (6.0.x). There is intentionally **no `lxc` binary** — `lxc list` is LXD/Incus syntax, so `lxc: command not found` does **not** mean LXC is broken. Do not install LXD/Incus for this panel; they are a different runtime with an incompatible CLI.
+
+Verify the real tooling on the host with:
+
+```bash
+command -v lxc-ls lxc-info lxc-create lxc-start lxc-stop lxc-destroy lxc-attach lxc-cgroup lxc-wait
+lxc-ls --version
+test -f /usr/share/lxc/templates/lxc-download && echo "download template present"
+lxc-ls -f
+```
+
+The installer checks every binary above by name, executes `--version` on the core tools, confirms the download template exists, and only reports success when `lxc-ls -f` really lists. The final report prints this evidence; if tooling is still missing it exits nonzero instead.
+
+### VPS management and console
+
+Each VPS has a dedicated page at `/instances/:id` (linked from the dashboard via its name or **Manage**) with Overview, Console, Resources, Network, and Settings tabs. Power actions are confirmed against the live container state before the database is updated; CPU/memory limits are enforced through host cgroup settings (v1 or v2, detected automatically); disk quotas are **not** enforced by the directory backend and the UI says so.
+
+The Console tab attaches to the running container via `lxc-attach` over an authenticated WebSocket (`node-pty` required on the host — it is an optional dependency, and the tab reports honestly when it is missing). Sessions enforce ownership, expire after 15 minutes idle, and never reach the host shell.
+
 ## Quick start (development)
 
 Prerequisites: Node.js 22+, npm.

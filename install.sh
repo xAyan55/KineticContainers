@@ -335,13 +335,36 @@ setup_lxc_network() {
   return 1
 }
 
-# Basic capability proof: binaries present, listable, storage path exists.
+# KineticCT uses classic LXC (lxc-ls, lxc-create, ...). There is intentionally
+# NO `lxc` binary: `lxc list` is LXD/Incus syntax and its absence proves
+# nothing about this setup. Every binary below is checked by name; the core
+# tools additionally have to execute `--version`, and `lxc-ls -f` must really
+# list. Anything less is a hard failure, never a silent success.
+LXC_REQUIRED_BINS="lxc-ls lxc-info lxc-create lxc-start lxc-stop lxc-destroy lxc-attach lxc-cgroup lxc-wait"
+LXC_VERSION_BINS="lxc-ls lxc-info lxc-create lxc-start lxc-stop lxc-destroy"
+LXC_EVIDENCE=""
+
+# Basic capability proof: binaries present, core tools executable, download
+# template present, inventory listable, storage path exists.
 verify_lxc_basic() {
-  local missing="" b
-  for b in lxc-ls lxc-info lxc-create lxc-start lxc-stop lxc-destroy; do
-    if ! command -v "$b" >/dev/null 2>&1; then missing="$missing $b"; fi
+  local missing
+  missing="$(kct_bins_missing $LXC_REQUIRED_BINS)"
+  if [ -n "$missing" ]; then LXC_DETAIL="missing binaries:$(printf '%s' "$missing" | tr '\n' ' ')"; return 1; fi
+  local b ver out
+  for b in $LXC_VERSION_BINS; do
+    if out="$("$b" --version 2>&1)"; then
+      ver="$(printf '%s' "$out" | head -n 1)"
+      LXC_EVIDENCE="${LXC_EVIDENCE}${b}: ${ver}$(printf '\n')"
+    else
+      warn "$b is present but would not execute --version."
+      LXC_EVIDENCE="${LXC_EVIDENCE}${b}: present but --version failed$(printf '\n')"
+    fi
   done
-  if [ -n "$missing" ]; then LXC_DETAIL="missing binaries:$missing"; return 1; fi
+  if ! kct_template_present; then
+    LXC_DETAIL="download template missing (/usr/share/lxc/templates/lxc-download)"
+    return 1
+  fi
+  LXC_EVIDENCE="${LXC_EVIDENCE}template: /usr/share/lxc/templates/lxc-download present$(printf '\n')"
   local user
   user="$(lxc_runtime_user)"
   if [ "$(id -u)" -eq 0 ] && [ "$user" != "root" ]; then
@@ -583,6 +606,13 @@ print_lxc_report() {
   info "Network:   ${LXC_NET}"
   info "Probe:     ${LXC_PROBE}"
   info "Status:    ${LXC_STATUS}${LXC_DETAIL:+ — $LXC_DETAIL}"
+  if [ -n "$LXC_EVIDENCE" ]; then
+    info "Verified tooling (classic LXC — note: there is no \`lxc\` binary; \`lxc list\` is LXD syntax):"
+    printf '%s\n' "$LXC_EVIDENCE" | while IFS= read -r line; do
+      [ -n "$line" ] && printf '    %s\n' "$line"
+    done || true
+  fi
+  return 0
 }
 
 # Setup-only mode for an EXISTING installation. Never touches .env, the
@@ -826,10 +856,10 @@ if ! npm install --no-audit --no-fund; then
     die "npm install failed."
   fi
 fi
-# Native modules (argon2, better-sqlite3) need install-script approval on npm 11+.
+# Native modules (argon2, better-sqlite3, node-pty) need install-script approval on npm 11+.
 if npm approve-scripts --help >/dev/null 2>&1; then
-  npm approve-scripts argon2 better-sqlite3 esbuild >/dev/null 2>&1 || true
-  npm rebuild argon2 better-sqlite3 >/dev/null 2>&1 || true
+  npm approve-scripts argon2 better-sqlite3 esbuild node-pty >/dev/null 2>&1 || true
+  npm rebuild argon2 better-sqlite3 node-pty >/dev/null 2>&1 || true
 fi
 
 say "Building frontend (API URL: ${VITE_API_BASE_URL:-same-origin}) ..."

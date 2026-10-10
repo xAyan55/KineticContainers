@@ -4,7 +4,7 @@ import { getDb, newId, nowIso } from "../../db.js";
 import { requireAuth, requireAdmin } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
 import { recordAudit } from "../../services/audit.js";
-import { getProvider, LocalLxcProvider } from "../../services/virtualization/localAgent.js";
+import { getProvider, LocalLxcProvider, containerExistsOnHost, readContainerState } from "../../services/virtualization/localAgent.js";
 import { ProviderError } from "../../services/virtualization/provider.js";
 
 export const adminCreateRouter = Router();
@@ -50,6 +50,24 @@ adminCreateRouter.post("/", validate(createSchema), async (req, res) => {
     return;
   }
 
+  // Uniqueness against the real host, not just the database.
+  try {
+    if (await containerExistsOnHost(containerId)) {
+      res.status(409).json({
+        error: { code: "CONTAINER_EXISTS", message: "A container with this identifier already exists on the host." },
+      });
+      return;
+    }
+  } catch (err) {
+    if (err instanceof ProviderError && err.code === "LXC_UNAVAILABLE") {
+      res.status(502).json({ error: { code: err.code, message: err.message } });
+      return;
+    }
+    if (err instanceof ProviderError) throw err;
+    res.status(502).json({ error: { code: "PROVIDER_ERROR", message: "Could not verify the host state." } });
+    return;
+  }
+
   // 1-4: inputs validated, node reachable check happens inside provider; reserve id via unique constraint.
   const id = newId("vps");
   const now = nowIso();
@@ -58,6 +76,7 @@ adminCreateRouter.post("/", validate(createSchema), async (req, res) => {
      VALUES (?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?)`
   ).run(id, req.body.name.trim(), containerId, node.id, owner.id, req.body.cpu, req.body.memory_mb, req.body.storage_gb, req.body.template, now, now);
 
+  let hostContainerOurs = false;
   try {
     const created = await provider.createContainer(node.id, {
       name: req.body.name.trim(),
@@ -67,12 +86,27 @@ adminCreateRouter.post("/", validate(createSchema), async (req, res) => {
       memoryMb: req.body.memory_mb,
       storageGb: req.body.storage_gb,
     });
-    db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run(created.status ?? "stopped", nowIso(), id);
-    recordAudit(db, { actorId: req.user!.id, action: "instance.create", targetType: "instance", targetId: id, detail: { node: node.id, owner: owner.id } });
+    hostContainerOurs = true;
+    // Confirm the real state (and the applied template/resources) before persisting success.
+    const liveState = await readContainerState(containerId).catch(() => "UNKNOWN" as const);
+    const status = liveState === "RUNNING" ? "running" : liveState === "STOPPED" ? "stopped" : (created.status ?? "stopped");
+    db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run(status, nowIso(), id);
+    recordAudit(db, { actorId: req.user!.id, action: "instance.create", targetType: "instance", targetId: id, detail: { node: node.id, owner: owner.id, status } });
     const fresh = db.prepare("SELECT * FROM instances WHERE id = ?").get(id);
     res.status(201).json({ data: { instance: fresh } });
   } catch (err) {
-    // Compensation: host succeeded but persistence or creation failed — mark honestly, never report success.
+    // Compensation: only ever touch the container this request created.
+    // A failed create leaves a 'failed' record (never a fake success); if the
+    // host container is ours but persistence/verification failed, destroy exactly
+    // that container so retries are possible. Never touch anything else.
+    if (hostContainerOurs) {
+      try {
+        await provider.deleteContainer(node.id, containerId);
+        recordAudit(db, { actorId: req.user!.id, action: "instance.create_rollback", targetType: "instance", targetId: id, detail: { container_id: containerId } });
+      } catch {
+        // Leave the record marked failed for manual recovery; report honestly.
+      }
+    }
     const message = err instanceof ProviderError ? err.message : "Container creation failed.";
     const code = err instanceof ProviderError ? err.code : "CREATE_FAILED";
     db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run("failed", nowIso(), id);

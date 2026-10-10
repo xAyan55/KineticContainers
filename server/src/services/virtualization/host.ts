@@ -17,14 +17,27 @@ const LXC_ALLOWLIST = new Set([
   "lxc-stop",
   "lxc-destroy",
   "lxc-checkconfig",
+  "lxc-wait",
+  "lxc-cgroup",
 ]);
 
-function execFileStrict(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+export interface RunLxcOptions {
+  timeoutMs?: number;
+  /** Append bounded stderr to failure messages (useful for create failures). */
+  includeStderr?: boolean;
+}
+
+function execFileStrict(
+  cmd: string,
+  args: string[],
+  timeoutMs: number = TIMEOUT_MS,
+  includeStderr = false
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(
       cmd,
       args,
-      { timeout: TIMEOUT_MS, maxBuffer: MAX_OUTPUT, windowsHide: true },
+      { timeout: timeoutMs, maxBuffer: MAX_OUTPUT, windowsHide: true },
       (err, stdout, stderr) => {
         if (err) {
           const code = (err as NodeJS.ErrnoException & { killed?: boolean }).code;
@@ -37,7 +50,12 @@ function execFileStrict(cmd: string, args: string[]): Promise<{ stdout: string; 
             reject(new ProviderError("LXC_TIMEOUT", `Host command timed out: ${cmd}.`, 504));
             return;
           }
-          reject(new ProviderError("LXC_COMMAND_FAILED", `Host command failed (${code ?? "error"}): ${cmd}.`));
+          let message = `Host command failed (${code ?? "error"}): ${cmd}.`;
+          if (includeStderr) {
+            const detail = String(stderr ?? "").trim().slice(0, 300);
+            if (detail) message += ` ${detail}`;
+          }
+          reject(new ProviderError("LXC_COMMAND_FAILED", message));
           return;
         }
         resolve({ stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
@@ -47,11 +65,11 @@ function execFileStrict(cmd: string, args: string[]): Promise<{ stdout: string; 
 }
 
 /** Run an LXC binary. The command must be allowlisted; args are never shelled. */
-export function runLxc(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+export function runLxc(cmd: string, args: string[], opts: RunLxcOptions = {}): Promise<{ stdout: string; stderr: string }> {
   if (!LXC_ALLOWLIST.has(cmd)) {
     return Promise.reject(new ProviderError("COMMAND_NOT_ALLOWED", `Command is not allowlisted: ${cmd}.`, 400));
   }
-  return execFileStrict(cmd, args);
+  return execFileStrict(cmd, args, opts.timeoutMs ?? TIMEOUT_MS, opts.includeStderr ?? false);
 }
 
 export function parseLxcLs(output: string): ContainerInfo[] {

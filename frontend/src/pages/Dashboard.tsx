@@ -62,7 +62,11 @@ export function DashboardPage(): React.JSX.Element {
             <tbody>
               {(instances ?? []).map((i) => (
                 <tr key={i.id}>
-                  <td className="font-medium text-primary">{i.name}</td>
+                  <td className="font-medium text-primary">
+                    <Link to={`/instances/${i.id}`} className="underline-offset-4 hover:underline">
+                      {i.name}
+                    </Link>
+                  </td>
                   <td className="font-mono text-xs text-muted">{i.container_id}</td>
                   <td><StatusBadge status={i.status} /></td>
                   <td className="text-muted">{i.node_name ?? "—"}</td>
@@ -73,6 +77,14 @@ export function DashboardPage(): React.JSX.Element {
                   <td className="text-muted">{formatDate(i.created_at)}</td>
                   <td>
                     <div className="flex gap-1.5">
+                      <Link
+                        to={`/instances/${i.id}`}
+                        aria-label={`Manage ${i.name}`}
+                        title="Manage"
+                        className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-primary"
+                      >
+                        Manage
+                      </Link>
                       <button type="button" disabled={acting !== null} onClick={() => void act(i.id, "start")} aria-label={`Start ${i.name}`} title="Start" className="rounded border border-border p-1.5 text-muted hover:text-primary disabled:opacity-50">
                         <Power className="h-3.5 w-3.5" aria-hidden="true" />
                       </button>
