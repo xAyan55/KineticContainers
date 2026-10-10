@@ -39,6 +39,7 @@ interface NodeCapabilities {
   memoryTotalMb?: number | null;
   storageUsedGb?: number | null;
   storageTotalGb?: number | null;
+  readiness?: HostCapabilities | null;
 }
 
 interface HostInfo {
@@ -60,6 +61,18 @@ interface HostInfo {
   rootAvailGb: number | null;
 }
 
+interface HostCapabilities {
+  lxcInstalled: boolean;
+  lxcVersion: string | null;
+  nestedGuest: string | null;
+  restrictedGuest: boolean;
+  userNamespaces: boolean | null;
+  cgroup: string;
+  bridgePresent: boolean | null;
+  ipForwarding: boolean | null;
+  runtimeUid: number | null;
+}
+
 interface NodeCheck {
   status: string;
   ok: boolean;
@@ -73,6 +86,7 @@ interface NodeCheck {
     resourcesOk: boolean;
   };
   host: HostInfo | null;
+  hostCapabilities?: HostCapabilities | null;
   containersTotal: number | null;
   containersRunning: number | null;
 }
@@ -315,9 +329,49 @@ function NodeDetails({
         )}
       </section>
 
+            <section aria-label="Host readiness">
+        <h3 className="mb-2 text-sm font-semibold text-primary">Host readiness</h3>
+        {(() => {
+          const ready = check?.hostCapabilities ?? caps?.readiness ?? null;
+          if (!ready) {
+            return (
+              <p className="text-sm text-muted">
+                {checking ? "Collecting readiness…" : "No readiness data yet — press Refresh to collect it."}
+              </p>
+            );
+          }
+          const tri = (v: boolean | null): string => (v === null ? "Unavailable" : v ? "Yes" : "No");
+          return (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Stat
+                label="LXC tooling"
+                value={ready.lxcInstalled ? `Installed${ready.lxcVersion ? ` (${ready.lxcVersion})` : ""}` : "Not installed"}
+              />
+              <Stat
+                label="Environment"
+                value={
+                  ready.nestedGuest
+                    ? `Nested (${ready.nestedGuest})${ready.restrictedGuest ? " — nesting likely blocked" : ""}`
+                    : "Bare metal or VM"
+                }
+              />
+              <Stat label="User namespaces" value={tri(ready.userNamespaces)} />
+              <Stat label="Cgroup" value={ready.cgroup} />
+              <Stat
+                label="Container bridge"
+                value={ready.bridgePresent === null ? "Unavailable" : ready.bridgePresent ? "Present" : "Absent"}
+              />
+              <Stat
+                label="IP forwarding"
+                value={ready.ipForwarding === null ? "Unavailable" : ready.ipForwarding ? "On" : "Off"}
+              />
+            </div>
+          );
+        })()}
+      </section>
+
       <section aria-label="Container inventory">
-        <h3 className="mb-2 text-sm font-semibold text-primary">Containers on this node</h3>
-        {containers === null ? (
+        <h3 className="mb-2 text-sm font-semibold text-primary">Containers on this node</h3>        {containers === null ? (
           <p className="text-sm text-muted">{checking ? "Reading container inventory…" : "Inventory Unavailable."}</p>
         ) : containers.length === 0 ? (
           <EmptyState title="No containers detected" hint="The host integration reported no LXC containers on this node." />

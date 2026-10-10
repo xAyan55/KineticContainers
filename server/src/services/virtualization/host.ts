@@ -96,12 +96,8 @@ export interface HostInfo {
 function readOsRelease(): { name: string | null; version: string | null } {
   try {
     const raw = fs.readFileSync("/etc/os-release", "utf8").slice(0, 4096);
-    const pick = (key: string): string | null => {
-      const m = raw.match(new RegExp(`^${key}=(.*)$`, "m"));
-      if (!m) return null;
-      return m[1].trim().replace(/^"|"$/g, "").slice(0, 120) || null;
-    };
-    return { name: pick("NAME"), version: pick("VERSION") };
+    const parsed = parseOsReleaseText(raw);
+    return { name: parsed.name, version: parsed.version };
   } catch {
     return { name: null, version: null };
   }
@@ -159,6 +155,169 @@ async function readRootFs(): Promise<{ totalGb: number; usedGb: number; availGb:
 }
 
 const MB = 1024 * 1024;
+
+// ---------------------------------------------------------------------------
+// Host capability detection (nested guests, userns, cgroup, bridge).
+// Pure parsers are exported for unit tests; getHostCapabilities() wires them
+// to the real host with best-effort, never-throwing probes.
+// ---------------------------------------------------------------------------
+
+export interface HostCapabilities {
+  lxcInstalled: boolean;
+  lxcVersion: string | null;
+  nestedGuest: string | null;
+  restrictedGuest: boolean;
+  userNamespaces: boolean | null;
+  cgroup: "v1" | "v2" | "hybrid" | "none";
+  bridgePresent: boolean | null;
+  ipForwarding: boolean | null;
+  runtimeUid: number | null;
+}
+
+const RESTRICTED_GUESTS = new Set(["docker", "lxc", "lxd", "openvz", "podman", "container"]);
+
+export function parseOsReleaseText(text: string): { id: string | null; name: string | null; version: string | null } {
+  const pick = (key: string): string | null => {
+    const m = text.match(new RegExp(`^${key}=(.*)$`, "m"));
+    if (!m) return null;
+    return m[1].trim().replace(/^"|"$/g, "").slice(0, 120) || null;
+  };
+  return { id: pick("ID"), name: pick("NAME"), version: pick("VERSION") };
+}
+
+export function detectNestedGuest(input: {
+  dockerenv: boolean;
+  virt: string | null;
+  cgroup: string | null;
+}): string | null {
+  if (input.dockerenv) return "docker";
+  const v = (input.virt ?? "").trim().toLowerCase();
+  if (v && v !== "none") return v;
+  const cg = input.cgroup ?? "";
+  if (/docker|kubepods|containerd|crio/i.test(cg)) return "docker";
+  if (/(^|\/)lxc[\/-]/i.test(cg) || /\blxd\b/i.test(cg)) return "lxc";
+  if (/openvz|\bvz\b/i.test(cg)) return "openvz";
+  if (/podman/i.test(cg)) return "podman";
+  return null;
+}
+
+export function isRestrictedGuest(guest: string | null): boolean {
+  if (!guest) return false;
+  return RESTRICTED_GUESTS.has(guest.toLowerCase());
+}
+
+export function parseLxcVersion(output: string): string | null {
+  const m = output.match(/(\d+\.\d+(?:\.\d+)?)/);
+  return m ? m[1].slice(0, 32) : null;
+}
+
+export function classifyCgroup(hasV2Controllers: boolean, hasV1Controllers: boolean, hasCgroupDir: boolean): "v1" | "v2" | "hybrid" | "none" {
+  if (hasV2Controllers && hasV1Controllers) return "hybrid";
+  if (hasV2Controllers) return "v2";
+  if (hasV1Controllers || hasCgroupDir) return "v1";
+  return "none";
+}
+
+function safeExists(p: string): boolean {
+  try {
+    return fs.existsSync(p);
+  } catch {
+    return false;
+  }
+}
+
+function safeRead(p: string, maxBytes = 4096): string | null {
+  try {
+    return fs.readFileSync(p, "utf8").slice(0, maxBytes);
+  } catch {
+    return null;
+  }
+}
+
+/** Best-effort capability probes. Never throws: unknowns stay null/false. */
+export async function getHostCapabilities(): Promise<HostCapabilities> {
+  try {
+    return await collectHostCapabilities();
+  } catch {
+    return {
+      lxcInstalled: false,
+      lxcVersion: null,
+      nestedGuest: null,
+      restrictedGuest: false,
+      userNamespaces: null,
+      cgroup: "none",
+      bridgePresent: null,
+      ipForwarding: null,
+      runtimeUid: null,
+    };
+  }
+}
+
+async function collectHostCapabilities(): Promise<HostCapabilities> {
+  let lxcInstalled = false;
+  let lxcVersion: string | null = null;
+  try {
+    const { stdout } = await runLxc("lxc-ls", ["--version"]);
+    lxcInstalled = true;
+    lxcVersion = parseLxcVersion(stdout);
+  } catch {
+    lxcInstalled = false;
+    lxcVersion = null;
+  }
+
+  let virt: string | null = null;
+  try {
+    const { stdout } = await execFileStrict("systemd-detect-virt", []);
+    virt = stdout.trim().slice(0, 32) || null;
+  } catch {
+    virt = null;
+  }
+  const cgroupText =
+    safeRead("/proc/1/cgroup") ?? safeRead("/proc/self/cgroup");
+  const nestedGuest = detectNestedGuest({
+    dockerenv: safeExists("/.dockerenv"),
+    virt,
+    cgroup: cgroupText,
+  });
+
+  let userNamespaces: boolean | null = null;
+  try {
+    await execFileStrict("unshare", ["-U", "true"]);
+    userNamespaces = true;
+  } catch (err) {
+    userNamespaces = err instanceof ProviderError && err.code === "LXC_UNAVAILABLE" ? null : false;
+  }
+
+  const cgroup = classifyCgroup(
+    safeExists("/sys/fs/cgroup/cgroup.controllers"),
+    ["memory", "cpu", "pids"].some((c) => safeExists(`/sys/fs/cgroup/${c}`)),
+    safeExists("/sys/fs/cgroup")
+  );
+
+  let bridgePresent: boolean | null = null;
+  try {
+    await execFileStrict("ip", ["-o", "link", "show", "lxcbr0"]);
+    bridgePresent = true;
+  } catch (err) {
+    bridgePresent = err instanceof ProviderError && err.code === "LXC_UNAVAILABLE" ? null : false;
+  }
+
+  const ipfwd = safeRead("/proc/sys/net/ipv4/ip_forward", 16)?.trim() ?? null;
+  const runtimeUid =
+    typeof process.geteuid === "function" ? process.geteuid() : null;
+
+  return {
+    lxcInstalled,
+    lxcVersion,
+    nestedGuest,
+    restrictedGuest: isRestrictedGuest(nestedGuest),
+    userNamespaces,
+    cgroup,
+    bridgePresent,
+    ipForwarding: ipfwd === "1" ? true : ipfwd === "0" ? false : null,
+    runtimeUid,
+  };
+}
 
 function emptyHostInfo(): HostInfo {
   return {
@@ -261,6 +420,7 @@ export interface NodeHealthCheck {
     resourcesOk: boolean;
   };
   host: HostInfo | null;
+  hostCapabilities: HostCapabilities | null;
   containersTotal: number | null;
   containersRunning: number | null;
 }
@@ -327,6 +487,7 @@ export async function checkNodeHealth(db: Database.Database, nodeId: string): Pr
       detail,
       checks: { lxcInstalled: false, commandsOk: false, permissionsOk: false, inventoryOk: false, resourcesOk: false },
       host: null,
+      hostCapabilities: null,
       containersTotal: null,
       containersRunning: null,
     };
@@ -336,6 +497,7 @@ export async function checkNodeHealth(db: Database.Database, nodeId: string): Pr
     const { stdout } = await runLxc("lxc-ls", ["-f"]);
     const containers = parseLxcLs(stdout);
     const host = await getHostInfo();
+    const hostCapabilities = await getHostCapabilities();
     const running = containers.filter((c) => c.status === "running").length;
     const resourcesOk =
       host.memoryTotalMb > 0 && (host.cpuCount > 0 || host.rootTotalGb !== null);
@@ -347,6 +509,7 @@ export async function checkNodeHealth(db: Database.Database, nodeId: string): Pr
       memoryTotalMb: host.memoryTotalMb,
       storageUsedGb: host.rootUsedGb,
       storageTotalGb: host.rootTotalGb,
+      readiness: hostCapabilities,
       host: {
         hostname: host.hostname,
         platform: host.platform,
@@ -373,6 +536,7 @@ export async function checkNodeHealth(db: Database.Database, nodeId: string): Pr
       detail: "Host agent reachable; LXC tools responded.",
       checks: { lxcInstalled: true, commandsOk: true, permissionsOk: true, inventoryOk: true, resourcesOk },
       host,
+      hostCapabilities,
       containersTotal: containers.length,
       containersRunning: running,
     };
@@ -392,7 +556,8 @@ export async function checkNodeHealth(db: Database.Database, nodeId: string): Pr
       detail = "Permission denied: the backend cannot execute the LXC tooling. Run with sufficient privileges for container operations.";
     }
     persistHealth(db, nodeId, { status, ok: false, checkedAt, error: detail, capabilities: null });
-    return { status, ok: false, checkedAt, detail, checks, host: null, containersTotal: null, containersRunning: null };
+    const hostCapabilities = await getHostCapabilities();
+    return { status, ok: false, checkedAt, detail, checks, host: null, hostCapabilities, containersTotal: null, containersRunning: null };
   }
 }
 

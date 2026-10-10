@@ -28,8 +28,34 @@ The installer asks for every setting (port, admin email/password, session lifeti
 | `--non-interactive` | Like `--yes`, but fail instead of guessing when a required value has no default. |
 | `--service pm2\|systemd\|none` | How to keep the panel running on boot (default: `pm2`). |
 | `--no-service` | Skip the systemd service prompt. |
+| `--skip-lxc` | Skip automatic LXC host setup (panel only). |
+| `--setup-lxc-only` | Only configure LXC on this host for an EXISTING installation (see below). Requires root. |
+| `--probe` | Run a full create/start/stop/destroy probe container during verification. |
 | `--start` | Launch the server in the foreground when finished. |
 | `--dir DIR` / `--branch NAME` | Control where the auto-clone goes / which branch it uses. |
+
+## LXC host setup
+
+On a fresh install the installer also prepares the local virtualization host automatically (Debian/Ubuntu, x86_64/aarch64, root required): it installs the LXC userspace (`lxc`, `uidmap`, `libpam-cgfs`, bridge/dnsmasq/squashfs helpers), ensures subordinate UID/GID mappings, brings up the `lxcbr0` container bridge via `lxc-net` when missing (existing bridges, Netplan/NetworkManager rules, and firewall rules are never touched), verifies the tooling is runnable by the panel's service account, and reports the real result. Nothing is overwritten blindly: existing LXC installs are reused, and config backups (`*.kct-bak`) are kept for edited files.
+
+Hosts that cannot run nested containers (Docker/LXC/OpenVZ guests without nesting) are detected up front and reported as unsupported instead of failing halfway — move to a KVM VPS with nesting enabled by your provider in that case.
+
+### Existing installation: set up LXC without reinstalling
+
+If KineticCT is already installed and running, configure LXC on that same host with:
+
+```bash
+cd /root/KineticContainers && git pull --ff-only && ./install.sh --setup-lxc-only
+```
+
+Setup-only mode performs host LXC setup, runtime permission checks, a capability probe (temporary `kct-probe-*` container, always cleaned up), panel health verification, and a real Local Node health check through the backend. It never touches `.env`, the database contents (besides node health columns), users, settings, ports, service config, existing containers, or firewall rules.
+
+### Verifying the Local Node
+
+1. Open **Nodes** in the admin sidebar — the host appears as `Local Node`.
+2. Press **Refresh** (or open **Details**) to run a live health check.
+3. `Online` means LXC answered and inventory was readable; the details dialog shows host resources, a readiness checklist (tooling, nesting, userns, cgroup, bridge, forwarding), and the detected containers.
+4. `Unconfigured` means LXC is not installed — run the setup command above. `Error` with "Permission denied" means the backend user cannot execute the LXC tooling (run the panel as root or fix permissions; never add blanket `NOPASSWD: ALL` sudo rules).
 
 ## Quick start (development)
 

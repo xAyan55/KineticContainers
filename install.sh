@@ -15,6 +15,12 @@
 #       --no-service      Same as --service none.
 #       --no-system-deps  Do not install system packages (git, Node.js, build
 #                         tools) — fail instead if they are missing.
+#       --skip-lxc        Skip automatic LXC host setup (panel only).
+#       --setup-lxc-only  Only configure LXC on this host for an EXISTING
+#                         installation. Never touches .env, the database,
+#                         users, or service config. Requires root.
+#       --probe           Run a full create/start/stop/destroy probe container
+#                         during verification (default in --setup-lxc-only).
 #       --start           Start the server in the foreground when finished.
 #       --dir DIR         Install directory when cloning (default: $HOME/KineticContainers).
 #       --branch NAME     Git branch to clone (default: main).
@@ -37,6 +43,9 @@ YES=0
 NON_INTERACTIVE=0
 NO_SERVICE=0
 SYS_DEPS=1
+SKIP_LXC=0
+SETUP_LXC_ONLY=0
+PROBE=0
 SERVICE="${SERVICE:-}"
 START_NOW=0
 INSTALL_DIR="${INSTALL_DIR:-$HOME/KineticContainers}"
@@ -65,6 +74,9 @@ while [ $# -gt 0 ]; do
     --service=*) SERVICE="${1#--service=}"; shift ;;
     --no-service) NO_SERVICE=1; shift ;;
     --no-system-deps) SYS_DEPS=0; shift ;;
+    --skip-lxc) SKIP_LXC=1; shift ;;
+    --setup-lxc-only) SETUP_LXC_ONLY=1; shift ;;
+    --probe) PROBE=1; shift ;;
     --start) START_NOW=1; shift ;;
     --dir) INSTALL_DIR="$2"; shift 2 ;;
     --dir=*) INSTALL_DIR="${1#--dir=}"; shift ;;
@@ -186,9 +198,422 @@ install_build_toolchain() {
   esac
 }
 
-ensure_base_tools
+# ---------------------------------------------------------------------------
+# LXC host setup (packages, permissions, networking, verification)
+# ---------------------------------------------------------------------------
+# Status globals (never unset; safe under `set -u`).
+LXC_STATUS="pending"
+LXC_DETAIL=""
+LXC_PACKAGES="pending"
+LXC_NET="pending"
+LXC_PROBE="pending"
+LXC_OS_ID=""
+LXC_OS_LIKE=""
+LXC_ARCH=""
+LXC_GUEST=""
+LXC_RESTRICTED=0
+LXC_USERNS="unknown"
+LXC_CGROUP="none"
+LXC_BRIDGE="absent"
+LXC_IPFWD="unknown"
+LXC_HAS_LXC=0
+KCT_NODE_STATUS="unknown"
+KCT_NODE_DETAIL=""
 
-# If we are not inside a checkout (e.g. `curl ... | bash`), clone and re-exec.
+lxc_runtime_user() {
+  if [ -n "${SUDO_USER:-}" ]; then printf '%s' "$SUDO_USER"; return 0; fi
+  if [ -n "${USER:-}" ]; then printf '%s' "$USER"; return 0; fi
+  id -un 2>/dev/null || printf 'root'
+}
+
+# $1 = die|warn. Root (or working sudo) is mandatory for host changes.
+require_lxc_root() {
+  if [ "$(id -u)" -eq 0 ]; then return 0; fi
+  if command -v sudo >/dev/null 2>&1; then
+    if sudo true 2>/dev/null; then return 0; fi
+  fi
+  if [ "$1" = "die" ]; then
+    die "LXC setup needs root privileges (run as root or with working sudo)."
+  fi
+  warn "LXC setup needs root privileges — continuing without LXC."
+  return 1
+}
+
+# Keep a single backup; never overwrite it, never touch anything else.
+backup_file() { # $1 = file
+  local f="$1"
+  if [ ! -f "$f" ]; then return 0; fi
+  if [ -f "$f.kct-bak" ]; then return 0; fi
+  if run_root cp -a "$f" "$f.kct-bak"; then return 0; fi
+  return 1
+}
+
+ensure_subid() { # $1 = user, $2 = /etc/subuid or /etc/subgid
+  local user="$1" file="$2"
+  if [ ! -f "$file" ]; then
+    if ! run_root touch "$file"; then return 1; fi
+    run_root chmod 644 "$file" || true
+  fi
+  if grep -qE "^${user}:" "$file" 2>/dev/null; then return 0; fi
+  if ! backup_file "$file"; then return 1; fi
+  if printf '%s:100000:65536\n' "$user" | run_root tee -a "$file" >/dev/null; then return 0; fi
+  return 1
+}
+
+lxc_detect_all() {
+  LXC_OS_ID="$(kct_os_id)"
+  LXC_OS_LIKE="$(kct_os_like)"
+  LXC_ARCH="$(uname -m 2>/dev/null || printf 'unknown')"
+  LXC_GUEST="$(kct_detect_guest)"
+  if kct_restricted_guest "$LXC_GUEST"; then LXC_RESTRICTED=1; else LXC_RESTRICTED=0; fi
+  LXC_USERNS="$(kct_userns)"
+  LXC_CGROUP="$(kct_cgroup)"
+  LXC_BRIDGE="$(kct_bridge lxcbr0)"
+  LXC_IPFWD="$(kct_ipfwd)"
+  if command -v lxc-ls >/dev/null 2>&1; then LXC_HAS_LXC=1; else LXC_HAS_LXC=0; fi
+}
+
+setup_lxc_packages() {
+  if ! detect_pkg_mgr; then
+    warn "No supported package manager found."
+    return 1
+  fi
+  local pkgs
+  pkgs="$(kct_lxc_packages "$PKG_MGR")"
+  if [ -z "$pkgs" ]; then
+    warn "Automatic LXC install supports Debian/Ubuntu (apt) only."
+    return 1
+  fi
+  # shellcheck disable=SC2086 — intentional word splitting of the package list.
+  if pkg_install $pkgs; then
+    hash -r 2>/dev/null || true
+    if command -v lxc-ls >/dev/null 2>&1; then
+      LXC_PACKAGES="installed"
+      return 0
+    fi
+    warn "Packages installed but lxc-ls is still missing."
+    return 1
+  fi
+  warn "Package installation failed."
+  return 1
+}
+
+setup_lxc_network() {
+  LXC_NET="unverified"
+  if [ "$(kct_bridge lxcbr0)" = "present" ]; then
+    info "Container bridge lxcbr0 already present — leaving host networking untouched."
+    LXC_NET="ok"
+    return 0
+  fi
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "No systemd here: cannot manage lxc-net; container networking stays unverified."
+    return 1
+  fi
+  if [ ! -f /lib/systemd/system/lxc-net.service ] && [ ! -f /etc/systemd/system/lxc-net.service ]; then
+    warn "lxc-net unit not found; container networking stays unverified."
+    return 1
+  fi
+  if ! run_root systemctl enable --now lxc-net >/dev/null 2>&1; then
+    warn "Could not start lxc-net."
+    return 1
+  fi
+  sleep 2
+  if [ "$(kct_bridge lxcbr0)" = "present" ]; then
+    info "Bridge lxcbr0 is up via lxc-net."
+    if [ "$(kct_ipfwd)" != "1" ]; then
+      if printf 'net.ipv4.ip_forward=1\n' | run_root tee /etc/sysctl.d/99-kineticct-lxc.conf >/dev/null 2>&1; then
+        run_root sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+        info "Enabled IPv4 forwarding for the container bridge (drop-in file only; firewall untouched)."
+      else
+        warn "Could not enable IPv4 forwarding."
+      fi
+    fi
+    LXC_NET="ok"
+    return 0
+  fi
+  warn "lxc-net started but lxcbr0 did not appear."
+  return 1
+}
+
+# Basic capability proof: binaries present, listable, storage path exists.
+verify_lxc_basic() {
+  local missing="" b
+  for b in lxc-ls lxc-info lxc-create lxc-start lxc-stop lxc-destroy; do
+    if ! command -v "$b" >/dev/null 2>&1; then missing="$missing $b"; fi
+  done
+  if [ -n "$missing" ]; then LXC_DETAIL="missing binaries:$missing"; return 1; fi
+  local user
+  user="$(lxc_runtime_user)"
+  if [ "$(id -u)" -eq 0 ] && [ "$user" != "root" ]; then
+    if command -v sudo >/dev/null 2>&1; then
+      if ! sudo -Hu "$user" lxc-ls -f >/dev/null 2>&1; then
+        LXC_DETAIL="runtime user '$user' cannot run lxc-ls"
+        return 1
+      fi
+    else
+      LXC_DETAIL="cannot verify LXC access for '$user' (no sudo)"
+      return 1
+    fi
+  else
+    if ! lxc-ls -f >/dev/null 2>&1; then
+      LXC_DETAIL="lxc-ls failed — check permissions for '$user'"
+      return 1
+    fi
+  fi
+  if [ ! -d /var/lib/lxc ]; then LXC_DETAIL="/var/lib/lxc is missing"; return 1; fi
+  return 0
+}
+
+# Full create/start/stop/destroy cycle on a uniquely-named temp container.
+# Cleans up only what it created; never touches existing containers.
+run_lxc_probe() {
+  LXC_PROBE="failed"
+  local name="kct-probe-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  if lxc-ls 2>/dev/null | grep -qx "$name"; then
+    LXC_DETAIL="probe name collision, retry the setup"
+    return 1
+  fi
+  local create_args=(-n "$name" -t download -- -d ubuntu -r jammy -a amd64)
+  if command -v timeout >/dev/null 2>&1; then
+    if ! timeout 240 lxc-create "${create_args[@]}" >/dev/null 2>&1; then
+      LXC_DETAIL="probe creation failed (image download needs working network/DNS)"
+      lxc-destroy -f -n "$name" >/dev/null 2>&1 || true
+      return 1
+    fi
+  else
+    if ! lxc-create "${create_args[@]}" >/dev/null 2>&1; then
+      LXC_DETAIL="probe creation failed (image download needs working network/DNS)"
+      lxc-destroy -f -n "$name" >/dev/null 2>&1 || true
+      return 1
+    fi
+  fi
+  if ! lxc-start -n "$name" >/dev/null 2>&1; then
+    LXC_DETAIL="probe container would not start"
+    lxc-destroy -f -n "$name" >/dev/null 2>&1 || true
+    return 1
+  fi
+  local i state=""
+  for i in $(seq 1 30); do
+    state="$(lxc-info -n "$name" -sH 2>/dev/null || true)"
+    if [ "$state" = "RUNNING" ]; then break; fi
+    sleep 2
+  done
+  if [ "$state" != "RUNNING" ]; then
+    LXC_DETAIL="probe container never reached RUNNING"
+    lxc-destroy -f -n "$name" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! lxc-stop -n "$name" >/dev/null 2>&1; then
+    LXC_DETAIL="probe container would not stop cleanly"
+    lxc-destroy -f -n "$name" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! lxc-destroy -n "$name" >/dev/null 2>&1; then
+    LXC_DETAIL="probe cleanup (destroy) failed — remove '$name' manually"
+    return 1
+  fi
+  LXC_PROBE="passed"
+  return 0
+}
+
+# Shared core for fresh installs ("install") and existing hosts ("setup-only").
+setup_lxc_host() { # $1 = install|setup-only
+  local mode="$1"
+  say "Setting up LXC host integration ..."
+  lxc_detect_all
+  info "OS: ${LXC_OS_ID:-unknown} (${LXC_ARCH}); guest: ${LXC_GUEST:-bare metal}; userns: ${LXC_USERNS}; cgroup: ${LXC_CGROUP}"
+  if [ "$LXC_RESTRICTED" -eq 1 ]; then
+    LXC_STATUS="unsupported"
+    LXC_DETAIL="nested '${LXC_GUEST}' guest blocks nested LXC — move to a KVM VPS with nesting enabled by your provider"
+    warn "Restricted environment (${LXC_GUEST}). ${LXC_DETAIL}."
+    return 1
+  fi
+  case "$LXC_ARCH" in
+    x86_64|aarch64) ;;
+    *)
+      LXC_STATUS="unsupported"
+      LXC_DETAIL="unsupported CPU architecture ($LXC_ARCH)"
+      warn "${LXC_DETAIL}."
+      return 1
+      ;;
+  esac
+  if [ "$LXC_HAS_LXC" -eq 1 ]; then
+    info "LXC already installed — reusing the existing setup."
+    LXC_PACKAGES="present"
+  else
+    if ! kct_distro_supported "$LXC_OS_ID" "$LXC_OS_LIKE"; then
+      LXC_STATUS="unsupported"
+      LXC_DETAIL="automatic LXC install supports Debian/Ubuntu only (found ${LXC_OS_ID:-unknown})"
+      warn "${LXC_DETAIL}."
+      return 1
+    fi
+    if ! setup_lxc_packages; then
+      LXC_STATUS="failed"
+      LXC_DETAIL="LXC package installation failed"
+      return 1
+    fi
+  fi
+  local ruser
+  ruser="$(lxc_runtime_user)"
+  if ! ensure_subid root /etc/subuid; then warn "Could not ensure /etc/subuid for root."; fi
+  if ! ensure_subid root /etc/subgid; then warn "Could not ensure /etc/subgid for root."; fi
+  if [ "$ruser" != "root" ]; then
+    if ! ensure_subid "$ruser" /etc/subuid; then warn "Could not ensure /etc/subuid for $ruser."; fi
+    if ! ensure_subid "$ruser" /etc/subgid; then warn "Could not ensure /etc/subgid for $ruser."; fi
+  fi
+  if [ ! -f /etc/lxc/default.conf ]; then
+    warn "No /etc/lxc/default.conf found; container creation may need explicit configuration."
+  fi
+  if ! setup_lxc_network; then
+    info "Continuing without verified container networking."
+  fi
+  if ! verify_lxc_basic; then
+    LXC_STATUS="failed"
+    warn "LXC verification failed: ${LXC_DETAIL:-unknown reason}."
+    return 1
+  fi
+  if [ "$ruser" != "root" ]; then
+    LXC_STATUS="unverified"
+    LXC_DETAIL="panel runs as '$ruser'; privileged container operations need a root service account"
+    warn "${LXC_DETAIL}."
+    return 1
+  fi
+  local want_probe=0
+  if [ "$mode" = "setup-only" ]; then want_probe=1; fi
+  if [ "$PROBE" -eq 1 ]; then want_probe=1; fi
+  if [ "$want_probe" -eq 1 ]; then
+    say "Running LXC capability probe (temporary container, cleaned up afterwards) ..."
+    if run_lxc_probe; then
+      info "Probe passed: create/start/stop/destroy all work."
+    else
+      LXC_STATUS="unverified"
+      warn "Probe did not complete: ${LXC_DETAIL:-unknown reason}."
+      return 1
+    fi
+  else
+    LXC_PROBE="skipped"
+  fi
+  LXC_STATUS="ready"
+  LXC_DETAIL="LXC installed, accessible, and verified"
+  if [ "$LXC_NET" != "ok" ]; then
+    LXC_DETAIL="LXC installed and accessible; container networking unverified"
+  fi
+  return 0
+}
+
+# Run the REAL backend health check against the REAL database using the
+# already-built backend. Touches only the node's own health columns.
+verify_local_node_via_dist() {
+  KCT_NODE_STATUS="unknown"
+  KCT_NODE_DETAIL=""
+  if [ ! -f "$REPO_ROOT/server/dist/db.js" ]; then
+    info "Backend not built in this checkout; skipping direct Local Node check."
+    return 1
+  fi
+  if [ ! -d "$REPO_ROOT/server/node_modules/dotenv" ]; then
+    info "Backend dependencies missing here; skipping direct Local Node check."
+    return 1
+  fi
+  local tmp out rc=0
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'EOF'
+const path = require("path");
+const dotenv = require("dotenv");
+dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
+dotenv.config();
+(async () => {
+  const dbm = require("./dist/db.js");
+  const hostm = require("./dist/services/virtualization/host.js");
+  const db = dbm.getDb();
+  const res = await hostm.checkNodeHealth(db, "local");
+  console.log("KCT_STATUS=" + res.status);
+  console.log("KCT_DETAIL=" + res.detail);
+})().catch((e) => { console.error("KCT_ERROR=" + ((e && e.message) || e)); process.exit(1); });
+EOF
+  out="$(cd "$REPO_ROOT/server" && node "$tmp" 2>&1)" || rc=$?
+  rm -f "$tmp"
+  if [ "$rc" -ne 0 ]; then
+    warn "Direct Local Node check failed; use Nodes → Refresh in the panel."
+    printf '%s\n' "$out" | head -5 || true
+    return 1
+  fi
+  KCT_NODE_STATUS="$(printf '%s\n' "$out" | grep -E '^KCT_STATUS=' | cut -d= -f2- || true)"
+  KCT_NODE_DETAIL="$(printf '%s\n' "$out" | grep -E '^KCT_DETAIL=' | cut -d= -f2- || true)"
+  if [ -z "$KCT_NODE_STATUS" ]; then KCT_NODE_STATUS="unknown"; fi
+  return 0
+}
+
+# Read-only panel checks: process presence + public health endpoint.
+verify_existing_panel() {
+  say "Verifying existing panel ..."
+  local running=""
+  if command -v pm2 >/dev/null 2>&1; then
+    if pm2 pid kineticct 2>/dev/null | grep -qE '[0-9]+'; then running="pm2"; fi
+  fi
+  if [ -z "$running" ] && command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet kineticct 2>/dev/null; then running="systemd"; fi
+  fi
+  if [ -z "$running" ] && command -v pgrep >/dev/null 2>&1; then
+    if pgrep -f "dist/index.js" >/dev/null 2>&1; then running="process"; fi
+  fi
+  if [ -n "$running" ]; then
+    info "Panel process is running (via $running) — leaving it untouched."
+  else
+    warn "No running panel detected (pm2/systemd/process). Start it before verifying the UI."
+  fi
+  local port="8080" p
+  if [ -f "$REPO_ROOT/.env" ]; then
+    p="$(grep -E '^PORT=' "$REPO_ROOT/.env" | cut -d= -f2- | tr -d '[:space:]' || true)"
+    if [ -n "$p" ]; then port="$p"; fi
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS --max-time 10 "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1; then
+      info "Panel API is healthy at http://127.0.0.1:${port}/api/health."
+    else
+      warn "Panel API did not answer at port ${port}."
+    fi
+  else
+    warn "curl missing; cannot probe the panel API."
+  fi
+}
+
+print_lxc_report() {
+  say "LXC setup report"
+  info "Packages:  ${LXC_PACKAGES}"
+  info "Network:   ${LXC_NET}"
+  info "Probe:     ${LXC_PROBE}"
+  info "Status:    ${LXC_STATUS}${LXC_DETAIL:+ — $LXC_DETAIL}"
+}
+
+# Setup-only mode for an EXISTING installation. Never touches .env, the
+# database contents (beyond node health columns), users, settings, ports,
+# service config, existing containers, or firewall rules.
+setup_lxc_only() {
+  say "LXC setup-only mode — existing installation at $REPO_ROOT"
+  say "This will NOT touch .env, the database, users, or the service config."
+  require_lxc_root die
+  if [ ! -f "$REPO_ROOT/server/package.json" ]; then
+    die "Not a KineticCT checkout: $REPO_ROOT"
+  fi
+  if setup_lxc_host "setup-only"; then
+    info "Host integration ready."
+  else
+    warn "Host integration incomplete (status: $LXC_STATUS)."
+  fi
+  verify_existing_panel
+  if verify_local_node_via_dist; then
+    info "Local Node backend check: ${KCT_NODE_STATUS} — ${KCT_NODE_DETAIL}"
+  fi
+  print_lxc_report
+  if [ "$LXC_STATUS" = "ready" ]; then
+    say "LXC setup complete and verified. Open Nodes → Refresh to see it live."
+    return 0
+  fi
+  warn "LXC setup incomplete (status: $LXC_STATUS): ${LXC_DETAIL:-see messages above}."
+  return 1
+}
+
+ensure_base_tools
 if [ ! -f "server/package.json" ] || [ ! -f "frontend/package.json" ]; then
   [ -n "${KCT_BOOTSTRAPPED:-}" ] && die "Could not find a KineticCT checkout after cloning."
   say "Cloning KineticCT into ${INSTALL_DIR} ..."
@@ -207,12 +632,30 @@ if [ ! -f "server/package.json" ] || [ ! -f "frontend/package.json" ]; then
   [ -n "${SERVICE:-}" ] && set -- "$@" --service="$SERVICE"
   [ "$NO_SERVICE" -eq 1 ] && set -- "$@" --no-service
   [ "$SYS_DEPS" -eq 0 ] && set -- "$@" --no-system-deps
+  [ "$SKIP_LXC" -eq 1 ] && set -- "$@" --skip-lxc
+  [ "$SETUP_LXC_ONLY" -eq 1 ] && set -- "$@" --setup-lxc-only
+  [ "$PROBE" -eq 1 ] && set -- "$@" --probe
   # Run from inside the fresh checkout, otherwise the check above fails again.
   cd "$INSTALL_DIR" || die "Cannot enter install directory: $INSTALL_DIR"
   exec bash "$INSTALL_DIR/install.sh" "$@"
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+
+# LXC host detection helpers (function definitions only, no side effects).
+KCT_LXC_LIB=1
+# shellcheck disable=SC1091
+if [ -f "$REPO_ROOT/lib/lxc-host.sh" ]; then
+  . "$REPO_ROOT/lib/lxc-host.sh"
+else
+  die "lib/lxc-host.sh is missing — update your checkout (git pull) and re-run."
+fi
+
+# Setup-only mode exits here: host LXC work only, never a fresh install.
+if [ "$SETUP_LXC_ONLY" -eq 1 ]; then
+  setup_lxc_only
+  exit $?
+fi
 
 # ---------------------------------------------------------------------------
 # prerequisites
@@ -401,6 +844,27 @@ npm run migrate --workspace=server || die "Migrations failed."
 info "Database ready at $DATABASE_PATH"
 
 # ---------------------------------------------------------------------------
+# LXC host setup (automatic unless skipped)
+# ---------------------------------------------------------------------------
+if [ "$SKIP_LXC" -eq 1 ]; then
+  info "LXC host setup skipped (--skip-lxc)."
+  LXC_STATUS="skipped"
+elif [ "$ON_WINDOWS" -eq 1 ]; then
+  info "LXC host setup skipped (not a Linux host)."
+  LXC_STATUS="skipped"
+else
+  if require_lxc_root warn; then
+    if setup_lxc_host "install"; then
+      info "LXC host integration ready."
+    else
+      warn "Continuing panel install without working LXC (status: $LXC_STATUS)."
+    fi
+  else
+    LXC_STATUS="skipped"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # background service: PM2 (default) or systemd
 # ---------------------------------------------------------------------------
 SERVICE_USER="${SUDO_USER:-${USER:-$(id -un)}}"
@@ -516,6 +980,15 @@ none)
 esac
 
 # ---------------------------------------------------------------------------
+# final verification: Local Node through the real backend
+# ---------------------------------------------------------------------------
+if [ "$LXC_STATUS" = "ready" ] || [ "$LXC_STATUS" = "unverified" ]; then
+  if verify_local_node_via_dist; then
+    info "Local Node backend check: ${KCT_NODE_STATUS} — ${KCT_NODE_DETAIL}"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # done
 # ---------------------------------------------------------------------------
 BASE_URL="http://127.0.0.1:${PORT}"
@@ -533,6 +1006,9 @@ if [ "$SERVICE" = "pm2" ]; then
   info "Manage with: pm2 [logs|restart|stop|monit] kineticct  (persist changes with: pm2 save)"
 elif [ "$SERVICE" = "systemd" ]; then
   info "Service: sudo systemctl [status|restart|stop] kineticct | logs: journalctl -u kineticct -e"
+fi
+if [ "$LXC_STATUS" != "pending" ] && [ "$LXC_STATUS" != "skipped" ]; then
+  info "LXC host: ${LXC_STATUS}${LXC_DETAIL:+ — $LXC_DETAIL} (Nodes page shows the live status)"
 fi
 if [ "$START_NOW" -eq 1 ] && [ "$SERVICE" = "none" ]; then
   say "Starting the server (Ctrl+C to stop) ..."

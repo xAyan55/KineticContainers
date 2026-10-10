@@ -1,3 +1,4 @@
-# Keep the installer runnable on Linux when cloned on Windows.
+# Keep shell scripts runnable on Linux when cloned on Windows.
 install.sh text eol=lf
 update.sh text eol=lf
+lib/lxc-host.sh text eol=lf
