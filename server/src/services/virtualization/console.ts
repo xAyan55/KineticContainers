@@ -37,6 +37,8 @@ export function __setPtyForTests(lib: PtyLib | null | undefined): void {
   ptyOverride = lib;
 }
 
+let ptyLoadError: string | null = null;
+
 /** node-pty is optional: without a working native binding there is no console. */
 export function loadPty(): PtyLib | null {
   if (ptyOverride !== undefined) return ptyOverride;
@@ -45,8 +47,11 @@ export function loadPty(): PtyLib | null {
     const lib = require("node-pty") as PtyLib;
     if (!lib || typeof lib.spawn !== "function") throw new Error("bad node-pty export");
     ptyOverride = lib;
+    ptyLoadError = null;
     return lib;
-  } catch {
+  } catch (err) {
+    // Paths only, no secrets — but keep it short for UI display.
+    ptyLoadError = (err instanceof Error ? err.message : String(err)).slice(0, 160);
     ptyOverride = null;
     return null;
   }
@@ -116,11 +121,12 @@ export interface ConsoleCheck {
 export async function checkConsoleRunnable(row: Record<string, unknown>): Promise<ConsoleCheck> {
   const pty = loadPty();
   if (!pty) {
+    const hint = ptyLoadError ? ` (${ptyLoadError})` : "";
     return {
       supported: false,
       running: false,
       shell: null,
-      reason: "Console access is unsupported: the terminal backend (node-pty) is unavailable on this host.",
+      reason: `Console access is unsupported: the terminal backend (node-pty) is unavailable on this host${hint}.`,
     };
   }
   const containerId = String(row.container_id);

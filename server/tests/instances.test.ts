@@ -281,6 +281,7 @@ describe("instance API honesty and isolation", () => {
     expect(res.status).toBe(200);
     expect(res.body.data.supported).toBe(false);
     expect(typeof res.body.data.reason).toBe("string");
+    expect(res.body.data.reason).toContain("node-pty");
   });
 
   it("authorizeConsole rejects anonymous and cross-user attempts", async () => {

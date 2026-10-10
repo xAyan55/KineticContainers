@@ -49,7 +49,24 @@ if ! npm install --no-audit --no-fund; then
 fi
 if npm approve-scripts --help >/dev/null 2>&1; then
   npm approve-scripts argon2 better-sqlite3 esbuild node-pty >/dev/null 2>&1 || true
-  npm rebuild argon2 better-sqlite3 >/dev/null 2>&1 || true
+  npm rebuild argon2 better-sqlite3 node-pty >/dev/null 2>&1 || true
+fi
+
+# The console tab needs the node-pty native binding. Verify it actually loads
+# and repair it (build tools + rebuild) instead of silently shipping without it.
+if ! (cd "$DIR/server" && node -e "require('node-pty')" >/dev/null 2>&1); then
+  warn "node-pty binding not usable — installing build tools and rebuilding ..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential python3 || true
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q gcc-c++ make python3 || true
+  fi
+  npm rebuild node-pty >/dev/null 2>&1 || true
+  if (cd "$DIR/server" && node -e "require('node-pty')" >/dev/null 2>&1); then
+    info "node-pty binding repaired."
+  else
+    warn "node-pty still unavailable — the console tab will report unsupported until it builds."
+  fi
 fi
 
 say "Rebuilding ..."
