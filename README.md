@@ -110,7 +110,9 @@ Repair compares each managed container against its allocation, backs up its conf
 
 ### VPS management and console
 
-Each VPS has a dedicated page at `/instances/:id` (linked from the dashboard via its name or **Manage**) with Overview, Console, Resources, Network, and Settings tabs. Power actions are confirmed against the live container state before the database is updated; CPU/memory limits are enforced through host cgroup settings (v1 or v2, detected automatically); disk quotas are enforced where the storage backend supports them (btrfs subvolumes, ext4 project quotas) and otherwise reported as unenforced — never faked.
+Each VPS has a dedicated page at `/instances/:id` (linked from the dashboard via its name or **Manage**) with Overview, Console, Resources, Network, and Settings tabs. Each tab has its own URL (`/instances/:id/overview`, `/console`, …), so refresh and back/forward preserve the open tab. Power actions are confirmed against the live container state before the database is updated; CPU/memory limits are enforced through host cgroup settings (v1 or v2, detected automatically); disk quotas are enforced where the storage backend supports them (btrfs subvolumes, ext4 project quotas) and otherwise reported as unenforced — never faked.
+
+Permissions: ordinary users can view, power-manage, and console into only the VPS assigned to them — renaming, changing specs, repairing, and deleting require an administrator (enforced server-side with `403`, not just hidden buttons). Administrators can manage every instance.
 
 The Console tab attaches to the running container via `lxc-attach` over an authenticated WebSocket (`node-pty` required on the host — it is an optional dependency, and the tab reports honestly when it is missing). Sessions enforce ownership, expire after 15 minutes idle, and never reach the host shell.
 

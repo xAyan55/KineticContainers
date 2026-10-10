@@ -30,6 +30,9 @@ import {
   readEffectiveConfig,
   planInstanceRepair,
   checkHostCapacity,
+  cgroupRoot,
+  findContainerCgroup,
+  readCgroupMetrics,
   RESOURCE_MODEL,
 } from "../src/services/virtualization/localAgent.js";
 import { authorizeConsole, __setPtyForTests } from "../src/services/virtualization/console.js";
@@ -329,6 +332,57 @@ Project         used    soft    hard  grace    used  soft  hard grace
   });
 });
 
+describe("cgroup-direct metrics fallback", () => {
+  const prevRoot = process.env.KCT_CGROUP_ROOT;
+  let dir = "";
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "kct-cgroup-"));
+    process.env.KCT_CGROUP_ROOT = dir;
+  });
+
+  afterEach(() => {
+    if (prevRoot === undefined) delete process.env.KCT_CGROUP_ROOT;
+    else process.env.KCT_CGROUP_ROOT = prevRoot;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("finds a container cgroup by layout-agnostic search", () => {
+    const target = path.join(dir, "lxc.payload", "web-01");
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, "memory.current"), "100663296\n");
+    fs.writeFileSync(path.join(target, "cpu.stat"), "usage_usec 12345678\nnr_periods 0\nnr_throttled 0\n");
+    expect(findContainerCgroup("web-01")).toBe(target);
+    expect(findContainerCgroup("ghost-99")).toBeNull();
+  });
+
+  it("reads memory and cpu from cgroup files", () => {
+    const target = path.join(dir, "machine.slice", "vps-abc");
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, "memory.current"), "209715200\n");
+    fs.writeFileSync(path.join(target, "cpu.stat"), "usage_usec 5000000\nnr_periods 10\nnr_throttled 0\n");
+    expect(readCgroupMetrics("vps-abc")).toEqual({ cpuSeconds: 5, memoryMb: 200 });
+  });
+
+  it("returns null when nothing readable exists", () => {
+    expect(readCgroupMetrics("ghost-99")).toBeNull();
+    const target = path.join(dir, "empty-01");
+    fs.mkdirSync(target, { recursive: true });
+    expect(readCgroupMetrics("empty-01")).toBeNull();
+  });
+
+  it("rejects invalid container ids before touching the filesystem", () => {
+    expect(() => findContainerCgroup("../escape")).toThrowError(ProviderError);
+    expect(() => readCgroupMetrics("")).toThrowError(ProviderError);
+  });
+
+  it("respects the default cgroup root", () => {
+    delete process.env.KCT_CGROUP_ROOT;
+    expect(cgroupRoot()).toBe("/sys/fs/cgroup");
+    process.env.KCT_CGROUP_ROOT = dir;
+  });
+});
+
 describe("host capacity admission", () => {
   it("refuses requests that provably exceed free capacity", () => {
     expect(() =>
@@ -447,8 +501,8 @@ describe("instance API honesty and isolation", () => {
   });
 
   it("refuses disk quota changes honestly", async () => {
-    const aliceAgent = await login("alice@test.local", "AlicePass12345");
-    const res = await aliceAgent.patch(`/api/instances/${aliceInstance}/resources`).send({ storage_gb: 99 });
+    const adminAgent = await login("admin@test.local", "AdminPass12345");
+    const res = await adminAgent.patch(`/api/instances/${aliceInstance}/resources`).send({ storage_gb: 99 });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("STORAGE_IMMUTABLE");
   });
@@ -462,12 +516,12 @@ describe("instance API honesty and isolation", () => {
   });
 
   it("reports an honest repair plan for a missing container", async () => {
-    const aliceAgent = await login("alice@test.local", "AlicePass12345");
+    const adminAgent = await login("admin@test.local", "AdminPass12345");
     // No LXC tooling on the test box: the container cannot exist on any host.
-    const plan = await aliceAgent.get(`/api/instances/${aliceInstance}/repair`);
+    const plan = await adminAgent.get(`/api/instances/${aliceInstance}/repair`);
     expect(plan.status).toBe(200);
     expect(plan.body.data.plan.exists).toBe(false);
-    const applied = await aliceAgent.post(`/api/instances/${aliceInstance}/repair`).send({});
+    const applied = await adminAgent.post(`/api/instances/${aliceInstance}/repair`).send({});
     expect(applied.status).toBe(200);
     expect(applied.body.data.report.checks[0].status).toBe("failed");
     // Nothing was modified: no backup, no drift.
@@ -493,18 +547,59 @@ describe("instance API honesty and isolation", () => {
   });
 
   it("validates resource updates before touching the host", async () => {
-    const aliceAgent = await login("alice@test.local", "AlicePass12345");
-    expect((await aliceAgent.patch(`/api/instances/${aliceInstance}/resources`).send({})).status).toBe(400);
-    expect((await aliceAgent.patch(`/api/instances/${aliceInstance}/resources`).send({ cpu: 99 })).status).toBe(400);
-    expect((await aliceAgent.patch(`/api/instances/${aliceInstance}/resources`).send({ memory_mb: 1 })).status).toBe(400);
+    const adminAgent = await login("admin@test.local", "AdminPass12345");
+    expect((await adminAgent.patch(`/api/instances/${aliceInstance}/resources`).send({})).status).toBe(400);
+    expect((await adminAgent.patch(`/api/instances/${aliceInstance}/resources`).send({ cpu: 99 })).status).toBe(400);
+    expect((await adminAgent.patch(`/api/instances/${aliceInstance}/resources`).send({ memory_mb: 1 })).status).toBe(400);
   });
 
   it("renames the display name without touching anything else", async () => {
-    const aliceAgent = await login("alice@test.local", "AlicePass12345");
-    const res = await aliceAgent.patch(`/api/instances/${aliceInstance}`).send({ name: "renamed-box" });
+    const adminAgent = await login("admin@test.local", "AdminPass12345");
+    const res = await adminAgent.patch(`/api/instances/${aliceInstance}`).send({ name: "renamed-box" });
     expect(res.status).toBe(200);
     expect(res.body.data.instance.name).toBe("renamed-box");
     expect(res.body.data.instance.container_id).toBe("web-01");
+  });
+
+  it("lets ordinary users use their VPS but not edit or delete it", async () => {
+    const aliceAgent = await login("alice@test.local", "AlicePass12345");
+    // Use: reading state and issuing power actions is allowed (fails here
+    // only on missing host tooling, proving the action was attempted).
+    expect((await aliceAgent.get(`/api/instances/${aliceInstance}`)).status).toBe(200);
+    const start = await aliceAgent.post(`/api/instances/${aliceInstance}/actions`).send({ action: "start" });
+    expect(start.status).toBe(502);
+    expect(start.body.error.code).toBe("LXC_UNAVAILABLE");
+    // Edit: every mutating endpoint except power actions is admin-only.
+    expect((await aliceAgent.patch(`/api/instances/${aliceInstance}`).send({ name: "nope" })).status).toBe(403);
+    expect((await aliceAgent.patch(`/api/instances/${aliceInstance}/resources`).send({ cpu: 4 })).status).toBe(403);
+    expect((await aliceAgent.get(`/api/instances/${aliceInstance}/repair`)).status).toBe(403);
+    expect((await aliceAgent.post(`/api/instances/${aliceInstance}/repair`).send({})).status).toBe(403);
+    expect((await aliceAgent.delete(`/api/instances/${aliceInstance}`)).status).toBe(403);
+    expect((await aliceAgent.post(`/api/instances/${aliceInstance}/actions`).send({ action: "remove" })).status).toBe(403);
+    // Untouched by all of the above.
+    const db = (await import("../src/db.js")).getDb();
+    const row = db.prepare("SELECT name, cpu, status FROM instances WHERE id = ?").get(aliceInstance) as {
+      name: string;
+      cpu: number;
+      status: string;
+    };
+    expect(row.name).toBe("web-01");
+    expect(row.cpu).toBe(2);
+    expect(row.status).toBe("stopped");
+  });
+
+  it("lets administrators manage instances they do not own", async () => {
+    const adminAgent = await login("admin@test.local", "AdminPass12345");
+    expect((await adminAgent.get(`/api/instances/${aliceInstance}`)).status).toBe(200);
+    // Config read fails honestly on missing host tooling (not 403/404).
+    const config = await adminAgent.get(`/api/instances/${aliceInstance}/config`);
+    expect(config.status).toBe(502);
+    expect(config.body.error.code).toBe("CONFIG_READ_FAILED");
+    expect((await adminAgent.get(`/api/instances/${aliceInstance}/console`)).status).toBe(200);
+    // Power action is attempted (fails only on missing host tooling).
+    const start = await adminAgent.post(`/api/instances/${aliceInstance}/actions`).send({ action: "start" });
+    expect(start.status).toBe(502);
+    expect(start.body.error.code).toBe("LXC_UNAVAILABLE");
   });
 
   it("rejects console access without a session", async () => {

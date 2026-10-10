@@ -13,6 +13,7 @@ import {
   enforceBtrfsQuota,
   enforceExt4Quota,
   getContainerMetrics,
+  type ContainerMetrics,
   getContainerNetwork,
   getContainerStorage,
   isBtrfsSubvolume,
@@ -58,6 +59,29 @@ function getOwnedInstance(db: ReturnType<typeof getDb>, instanceId: string, user
     .get(instanceId, userId) as InstanceRow | undefined;
 }
 
+/**
+ * Use-and-manage lookup: administrators see every instance, ordinary users
+ * see only their own. Unknown ids and (for users) foreign instances are 404.
+ */
+function getManagedInstance(
+  db: ReturnType<typeof getDb>,
+  instanceId: string,
+  user: { id: string; role: string }
+): InstanceRow | undefined {
+  if (user.role === "admin") {
+    return db
+      .prepare(
+        `SELECT i.*, n.name AS node_name FROM instances i LEFT JOIN nodes n ON n.id = i.node_id WHERE i.id = ?`
+      )
+      .get(instanceId) as InstanceRow | undefined;
+  }
+  return getOwnedInstance(db, instanceId, user.id);
+}
+
+function forbidden(res: Response): void {
+  res.status(403).json({ error: { code: "FORBIDDEN", message: "Administrator access required." } });
+}
+
 function notFound(res: Response): void {
   res.status(404).json({ error: { code: "NOT_FOUND", message: "Instance not found." } });
 }
@@ -82,7 +106,7 @@ instancesRouter.get("/", (req, res) => {
 
 instancesRouter.get("/:id", async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
     return;
@@ -140,13 +164,13 @@ async function readLiveState(row: InstanceRow): Promise<LiveState> {
 /** Live status + metrics, reconciled honestly (no fake data when unreadable). */
 instancesRouter.get("/:id/live", async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
     return;
   }
   const live = await readLiveState(row);
-  let metrics: { cpuSeconds: number | null; memoryMb: number | null } | null = null;
+  let metrics: ContainerMetrics | null = null;
   if (live.exists && live.status === "running") {
     try {
       metrics = await getContainerMetrics(row.container_id as string);
@@ -160,7 +184,7 @@ instancesRouter.get("/:id/live", async (req, res) => {
 /** Live network facts from the host. */
 instancesRouter.get("/:id/network", async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
     return;
@@ -180,7 +204,7 @@ instancesRouter.get("/:id/network", async (req, res) => {
 /** Effective (actually configured) resource limits. */
 instancesRouter.get("/:id/config", async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
     return;
@@ -219,13 +243,18 @@ const resourcesSchema = z
 /** Update enforced limits. CPU/memory via cgroups; storage only where quotas are enforceable. */
 instancesRouter.patch("/:id/resources", validate(resourcesSchema), async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
     return;
   }
   if (!row.node_id || !row.container_id) {
     res.status(409).json({ error: { code: "NO_NODE", message: "Instance is not attached to a configured node." } });
+    return;
+  }
+  // Changing allocations is admin-only; check before doing any host work.
+  if (req.user!.role !== "admin") {
+    forbidden(res);
     return;
   }
   const storageGb =
@@ -307,12 +336,16 @@ const renameSchema = z.object({
   name: z.string().trim().min(2).max(63).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, "Invalid display name."),
 });
 
-/** Rename the display name. The container identifier is immutable. */
+/** Rename the display name. The container identifier is immutable. Admin-only. */
 instancesRouter.patch("/:id", validate(renameSchema), (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
+    return;
+  }
+  if (req.user!.role !== "admin") {
+    forbidden(res);
     return;
   }
   db.prepare("UPDATE instances SET name = ?, updated_at = ? WHERE id = ?").run(
@@ -363,12 +396,16 @@ async function destroyInstance(
   return { removedHostContainer };
 }
 
-/** Delete: verify ownership, destroy the exact host container, then drop the record. */
+/** Delete: admin-only. Destroys the exact host container, then drops the record. */
 instancesRouter.delete("/:id", async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
+    return;
+  }
+  if (req.user!.role !== "admin") {
+    forbidden(res);
     return;
   }
   try {
@@ -383,13 +420,18 @@ const actionSchema = z.object({ action: z.enum(["start", "stop", "restart", "rem
 
 /**
  * Repair plan (read-only): compare DB allocation with effective host config.
- * Nothing is modified; use POST to apply the fixable items.
+ * Nothing is modified; use POST to apply the fixable items. Admin-only:
+ * repairs change host configuration.
  */
 instancesRouter.get("/:id/repair", async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
+    return;
+  }
+  if (req.user!.role !== "admin") {
+    forbidden(res);
     return;
   }
   if (!row.node_id || !row.container_id) {
@@ -412,12 +454,17 @@ instancesRouter.get("/:id/repair", async (req, res) => {
  * Apply a safe repair: re-apply drifted CPU/memory limits (config backed up
  * once, never overwritten), add the LXCFS include, enforce btrfs quotas.
  * Never destroys, recreates, migrates storage, or touches other containers.
+ * Admin-only: repairs change host configuration.
  */
 instancesRouter.post("/:id/repair", async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
+    return;
+  }
+  if (req.user!.role !== "admin") {
+    forbidden(res);
     return;
   }
   if (!row.node_id || !row.container_id) {
@@ -446,7 +493,7 @@ instancesRouter.post("/:id/repair", async (req, res) => {
 /** Console preflight: is an interactive console actually available? No session is opened. */
 instancesRouter.get("/:id/console", async (req, res) => {
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
     return;
@@ -474,7 +521,7 @@ instancesRouter.post("/:id/actions", async (req, res) => {
     return;
   }
   const db = getDb();
-  const row = getOwnedInstance(db, req.params.id, req.user!.id);
+  const row = getManagedInstance(db, req.params.id, req.user!);
   if (!row) {
     notFound(res);
     return;
@@ -484,6 +531,11 @@ instancesRouter.post("/:id/actions", async (req, res) => {
     return;
   }
   if (parsed.data.action === "remove") {
+    // Destroying a VPS (host container + record) is an admin-only operation.
+    if (req.user!.role !== "admin") {
+      forbidden(res);
+      return;
+    }
     try {
       const result = await destroyInstance(db, row, req.user!.id);
       res.json({ data: { removed: true, removedHostContainer: result.removedHostContainer } });

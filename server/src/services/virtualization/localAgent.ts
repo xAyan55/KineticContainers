@@ -238,12 +238,18 @@ export function parseLxcMetrics(output: string): { cpuSeconds: number | null; me
       cpuSeconds = Number.isFinite(n) && n >= 0 ? n : null;
       continue;
     }
-    m = line.match(/^Memory use:\s*([\d.]+)\s*([KMG]iB)/i);
+    m = line.match(/^Memory use:\s*([\d.]+)\s*([KMGTPE]?i?B)/i);
     if (m) {
       const n = Number(m[1]);
       const unit = m[2].toUpperCase();
       if (Number.isFinite(n) && n >= 0) {
-        const factor = unit === "GIB" ? 1024 : unit === "MIB" ? 1 : unit === "KIB" ? 1 / 1024 : 0;
+        const factor =
+          unit === "TIB" ? 1024 * 1024
+          : unit === "GIB" ? 1024
+          : unit === "MIB" ? 1
+          : unit === "KIB" ? 1 / 1024
+          : unit === "B" ? 1 / (1024 * 1024)
+          : 0;
         memoryMb = factor > 0 ? Math.round(n * factor * 10) / 10 : null;
       }
     }
@@ -251,19 +257,145 @@ export function parseLxcMetrics(output: string): { cpuSeconds: number | null; me
   return { cpuSeconds, memoryMb };
 }
 
-export async function getContainerMetrics(
-  containerId: string
-): Promise<{ cpuSeconds: number | null; memoryMb: number | null }> {
+export interface ContainerMetrics {
+  cpuSeconds: number | null;
+  memoryMb: number | null;
+  /** Where the numbers came from: lxc-info output or direct cgroup reads. */
+  source: "lxc-info" | "cgroup" | null;
+  /** Human-readable reason when source is null (shown in the UI, never a stack). */
+  detail: string | null;
+}
+
+/** Cgroup mount root, overridable for tests. */
+export function cgroupRoot(): string {
+  return process.env.KCT_CGROUP_ROOT ?? "/sys/fs/cgroup";
+}
+
+/**
+ * Locate a container's cgroup directory without assuming one fixed layout.
+ * Searches a bounded tree for a directory tied to the container id that
+ * exposes memory/cpu readings. Returns null when not found.
+ */
+export function findContainerCgroup(containerId: string, maxDirs = 500): string | null {
   validateContainerId(containerId);
-  const { stdout } = await run("lxc-info", ["-n", containerId]);
-  const parsed = parseLxcMetrics(stdout);
-  // Plausibility guard: host tooling over unlimited cgroups can emit absurd
-  // values (e.g. billions of GiB). A container can never use more than the
-  // host has — anything beyond that is reported as unavailable, never echoed.
-  return {
-    cpuSeconds: sanitizeMetric(parsed.cpuSeconds, null),
-    memoryMb: sanitizeMetric(parsed.memoryMb, hostTotalMemoryMb() || null),
-  };
+  const root = cgroupRoot();
+  const queue: { dir: string; depth: number }[] = [{ dir: root, depth: 0 }];
+  let visited = 0;
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    visited++;
+    if (visited > maxDirs) return null;
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(current.dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (!name.includes(containerId)) continue;
+      const full = path.join(current.dir, name);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(full);
+      } catch {
+        continue;
+      }
+      if (!stat.isDirectory()) continue;
+      try {
+        const inner = fs.readdirSync(full);
+        if (inner.includes("memory.current") || inner.includes("cpu.stat")) return full;
+      } catch {
+        continue;
+      }
+    }
+    if (current.depth < 3) {
+      for (const name of entries) {
+        if (name.startsWith(".")) continue;
+        const full = path.join(current.dir, name);
+        try {
+          if (fs.statSync(full).isDirectory()) queue.push({ dir: full, depth: current.depth + 1 });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function readFirstNumber(file: string): number | null {
+  try {
+    const first = fs.readFileSync(file, "utf8").trim().split(/\s+/, 1)[0] ?? "";
+    const n = Number(first);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read memory.current (bytes) + cpu.stat usage_usec directly from the cgroup. */
+export function readCgroupMetrics(containerId: string): { cpuSeconds: number | null; memoryMb: number | null } | null {
+  const dir = findContainerCgroup(containerId);
+  if (!dir) return null;
+  let memoryMb: number | null = null;
+  let cpuSeconds: number | null = null;
+  const memBytes = readFirstNumber(path.join(dir, "memory.current"));
+  if (memBytes !== null) memoryMb = Math.round((memBytes / (1024 * 1024)) * 10) / 10;
+  try {
+    const stat = fs.readFileSync(path.join(dir, "cpu.stat"), "utf8");
+    const m = stat.match(/^usage_usec\s+(\d+)/m);
+    if (m) cpuSeconds = Math.round((Number(m[1]) / 1e6) * 100) / 100;
+  } catch {
+    /* cpu stays null */
+  }
+  if (memoryMb === null && cpuSeconds === null) return null;
+  return { cpuSeconds, memoryMb };
+}
+
+export async function getContainerMetrics(containerId: string): Promise<ContainerMetrics> {
+  validateContainerId(containerId);
+  // Primary source: lxc-info (works across cgroup layouts and versions).
+  try {
+    const { stdout } = await run("lxc-info", ["-n", containerId]);
+    const parsed = parseLxcMetrics(stdout);
+    // Plausibility guard: host tooling over unlimited cgroups can emit absurd
+    // values (e.g. billions of GiB). A container can never use more than the
+    // host has — anything beyond that is reported as unavailable, never echoed.
+    const result = {
+      cpuSeconds: sanitizeMetric(parsed.cpuSeconds, null),
+      memoryMb: sanitizeMetric(parsed.memoryMb, hostTotalMemoryMb() || null),
+    };
+    if (result.cpuSeconds !== null || result.memoryMb !== null) {
+      return { ...result, source: "lxc-info" as const, detail: null };
+    }
+  } catch {
+    /* fall through to the cgroup fallback below */
+  }
+  // Fallback: read the container cgroup directly (no lxc-info parsing involved).
+  try {
+    const cgroup = readCgroupMetrics(containerId);
+    if (!cgroup) {
+      return {
+        cpuSeconds: null,
+        memoryMb: null,
+        source: null,
+        detail: "No readable metrics: lxc-info gave nothing usable and no container cgroup was found.",
+      };
+    }
+    return {
+      cpuSeconds: sanitizeMetric(cgroup.cpuSeconds, null),
+      memoryMb: sanitizeMetric(cgroup.memoryMb, hostTotalMemoryMb() || null),
+      source: "cgroup" as const,
+      detail: null,
+    };
+  } catch {
+    return {
+      cpuSeconds: null,
+      memoryMb: null,
+      source: null,
+      detail: "No readable metrics: lxc-info gave nothing usable and the container cgroup could not be read.",
+    };
+  }
 }
 
 export type CgroupVersion = "v1" | "v2" | "unknown";

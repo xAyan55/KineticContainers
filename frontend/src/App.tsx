@@ -45,7 +45,7 @@ export function App(): React.JSX.Element {
             }
           />
           <Route
-            path="/instances/:id"
+            path="/instances/:id/:tabId?"
             element={
               <RequireAuth>
                 <AppShell appName={appName}>

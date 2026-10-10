@@ -97,10 +97,17 @@ export async function authorizeConsole(
   if (!user || user.status !== "active") {
     throw new ProviderError("UNAUTHENTICATED", "Authentication required.", 401);
   }
-  // Owner-scoped: other users' instances (and unknown ids) are uniformly 404.
-  const row = db
-    .prepare("SELECT * FROM instances WHERE id = ? AND owner_id = ?")
-    .get(instanceId, user.id) as Record<string, unknown> | undefined;
+  // Use-and-manage scope: administrators may console into any instance,
+  // ordinary users only into their own. Unknown ids and (for users) foreign
+  // instances are uniformly 404.
+  const row =
+    user.role === "admin"
+      ? (db.prepare("SELECT * FROM instances WHERE id = ?").get(instanceId) as
+          | Record<string, unknown>
+          | undefined)
+      : (db.prepare("SELECT * FROM instances WHERE id = ? AND owner_id = ?").get(instanceId, user.id) as
+          | Record<string, unknown>
+          | undefined);
   if (!row) {
     throw new ProviderError("NOT_FOUND", "Instance not found.", 404);
   }

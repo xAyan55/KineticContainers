@@ -13,6 +13,7 @@ import {
   Terminal as TerminalIcon,
 } from "lucide-react";
 import { ApiError, api, type Instance } from "@/lib/api";
+import { useAuth } from "@/features/auth/AuthContext";
 import {
   Button,
   Card,
@@ -24,6 +25,10 @@ import {
   StatusBadge,
 } from "@/components/ui/primitives";
 import type { Terminal } from "@xterm/xterm";
+
+const LiveConsumptionCharts = React.lazy(() =>
+  import("@/components/ui/live-consumption-chart").then((m) => ({ default: m.LiveConsumptionCharts }))
+);
 
 function formatDateTime(iso: string): string {
   try {
@@ -162,31 +167,31 @@ function Fact({ label, value, mono }: { label: string; value: React.ReactNode; m
   );
 }
 
-function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh: () => void }) {
-  const [metrics, setMetrics] = React.useState<{ cpuSeconds: number | null; memoryMb: number | null } | null>(null);
-  const running = detail.live.exists === true && detail.live.status === "running";
+class TabErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { failed: false };
+  }
 
-  React.useEffect(() => {
-    let cancelled = false;
-    if (!running) {
-      setMetrics(null);
-      return;
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  render(): React.ReactNode {
+    if (this.state.failed) {
+      return (
+        <Card>
+          <p className="text-sm font-semibold text-primary">This section failed to render.</p>
+          <p className="mt-1 text-sm text-muted">The data returned was not in the expected shape. Other tabs are unaffected.</p>
+        </Card>
+      );
     }
-    api
-      .get<{ live: LiveState; metrics: { cpuSeconds: number | null; memoryMb: number | null } | null }>(
-        `/api/instances/${detail.instance.id}/live`
-      )
-      .then((d) => {
-        if (!cancelled) setMetrics(d.metrics);
-      })
-      .catch(() => {
-        if (!cancelled) setMetrics(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [detail.instance.id, running, detail.live.checkedAt]);
+    return this.props.children;
+  }
+}
 
+function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh: () => void }) {
+  const running = detail.live.exists === true && detail.live.status === "running";
   const i = detail.instance;
   return (
     <div className="flex flex-col gap-5">
@@ -211,16 +216,14 @@ function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh:
       </Card>
       <Card>
         <h2 className="mb-3 text-sm font-semibold text-primary">Live consumption</h2>
-        {!running ? (
-          <p className="text-sm text-muted">Unavailable — the container is not running.</p>
-        ) : !metrics ? (
-          <p className="text-sm text-muted" role="status">Reading live metrics…</p>
-        ) : (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <Fact label="CPU time used" value={metrics.cpuSeconds !== null ? `${metrics.cpuSeconds} s` : "Unavailable"} />
-            <Fact label="Memory in use" value={metrics.memoryMb !== null ? `${metrics.memoryMb} MB` : "Unavailable"} />
-          </div>
-        )}
+        <React.Suspense fallback={<p className="text-sm text-muted" role="status">Loading charts…</p>}>
+          <LiveConsumptionCharts
+            instanceId={i.id}
+            running={running}
+            vcpu={i.cpu}
+            memoryLimitMb={i.memory_mb}
+          />
+        </React.Suspense>
         <p className="mt-3 text-xs text-muted">Configured limits above are enforced by the host; live values are reported by LXC.</p>
       </Card>
       <Card>
@@ -400,7 +403,7 @@ function ConsoleTab({ instanceId }: { instanceId: string }) {
   );
 }
 
-function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh: () => void }) {
+function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceDetail; onRefresh: () => void; isAdmin: boolean }) {
   const i = detail.instance;
   const [config, setConfig] = React.useState<null | {
     configured: { cpu: number; memory_mb: number; storage_gb: number };
@@ -558,6 +561,10 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
       </Card>
       <Card>
         <h2 className="mb-1 text-sm font-semibold text-primary">Change limits</h2>
+        {!isAdmin ? (
+          <p className="text-sm text-muted">Only administrators can change resource allocations. Contact your administrator if this VPS needs different specs.</p>
+        ) : (
+        <>
         <p className="mb-4 text-xs text-muted">CPU and memory are enforced through cgroup limits{config ? ` (${config.effective.cgroupVersion})` : ""} and applied live when the container runs. {diskEditable ? "Disk quota is enforceable on this backend and can be changed below." : "Disk quotas are not enforceable on this backend."}</p>
         <form onSubmit={(e) => void save(e)} className="grid max-w-lg gap-4">
           <div>
@@ -581,8 +588,12 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
             <Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save limits"}</Button>
           </div>
         </form>
+        </>
+        )}
       </Card>
-      <RepairCard instanceId={i.id} onRepaired={() => { void loadConfig(); onRefresh(); }} />
+      {isAdmin ? (
+        <RepairCard instanceId={i.id} onRepaired={() => { void loadConfig(); onRefresh(); }} />
+      ) : null}
     </div>
   );
 }
@@ -712,16 +723,18 @@ function NetworkTab({ detail }: { detail: InstanceDetail }) {
     let cancelled = false;
     api
       .get<{
-        state: string;
-        pid: number | null;
-        ipv4: string[];
-        ipv6: string[];
-        links: string[];
-        bridge: string | null;
+        network: {
+          state: string;
+          pid: number | null;
+          ipv4: string[];
+          ipv6: string[];
+          links: string[];
+          bridge: string | null;
+        } | null;
       }>(`/api/instances/${detail.instance.id}/network`)
       .then((d) => {
         if (!cancelled) {
-          setNetwork(d);
+          setNetwork(d.network);
           setLoading(false);
         }
       })
@@ -747,22 +760,22 @@ function NetworkTab({ detail }: { detail: InstanceDetail }) {
         <p className="text-sm text-muted" role="status">Reading network info…</p>
       ) : !network ? null : (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <Fact label="State" value={network.state} />
+          <Fact label="State" value={network.state ?? "UNKNOWN"} />
           <Fact label="Bridge" value={network.bridge ?? "Unavailable"} mono />
-          <Fact label="IPv4" value={network.ipv4.length > 0 ? network.ipv4.join(", ") : "None reported"} mono />
-          <Fact label="IPv6" value={network.ipv6.length > 0 ? network.ipv6.join(", ") : "None reported"} mono />
-          <Fact label="Interfaces" value={network.links.length > 0 ? network.links.join(", ") : "Unavailable"} mono />
-          <Fact label="Host PID" value={network.pid !== null ? String(network.pid) : "—"} />
+          <Fact label="IPv4" value={(network.ipv4 ?? []).length > 0 ? (network.ipv4 ?? []).join(", ") : "None reported"} mono />
+          <Fact label="IPv6" value={(network.ipv6 ?? []).length > 0 ? (network.ipv6 ?? []).join(", ") : "None reported"} mono />
+          <Fact label="Interfaces" value={(network.links ?? []).length > 0 ? (network.links ?? []).join(", ") : "Unavailable"} mono />
+          <Fact label="Host PID" value={network.pid !== null && network.pid !== undefined ? String(network.pid) : "—"} />
         </div>
       )}
-      {!loading && network && network.ipv4.length === 0 && network.ipv6.length === 0 ? (
+      {!loading && network && (network.ipv4 ?? []).length === 0 && (network.ipv6 ?? []).length === 0 ? (
         <p className="mt-3 text-xs text-muted">No address reported — the container is likely stopped, or DHCP on the bridge has not assigned one yet.</p>
       ) : null}
     </Card>
   );
 }
 
-function SettingsTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh: () => void }) {
+function SettingsTab({ detail, onRefresh, isAdmin }: { detail: InstanceDetail; onRefresh: () => void; isAdmin: boolean }) {
   const navigate = useNavigate();
   const i = detail.instance;
   const [name, setName] = React.useState(i.name);
@@ -810,6 +823,13 @@ function SettingsTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh:
           {notice}
         </div>
       ) : null}
+      {!isAdmin ? (
+        <Card>
+          <h2 className="mb-1 text-sm font-semibold text-primary">Settings</h2>
+          <p className="text-sm text-muted">Only administrators can rename or delete VPS instances. You can start, stop, restart, and use the console on VPS assigned to you.</p>
+        </Card>
+      ) : null}
+      {isAdmin ? (
       <Card>
         <h2 className="mb-4 text-sm font-semibold text-primary">Display name</h2>
         <form onSubmit={(e) => void saveName(e)} className="flex max-w-md flex-col gap-3">
@@ -822,6 +842,7 @@ function SettingsTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh:
           </div>
         </form>
       </Card>
+      ) : null}
       <Card>
         <h2 className="mb-3 text-sm font-semibold text-primary">Details</h2>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -832,6 +853,7 @@ function SettingsTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh:
           <Fact label="Created" value={formatDateTime(i.created_at)} />
         </div>
       </Card>
+      {isAdmin ? (
       <Card>
         <h2 className="mb-1 text-sm font-semibold text-primary">Delete VPS</h2>
         <p className="mb-4 text-xs text-muted">Destroys the exact host container <span className="font-mono">{i.container_id}</span> and removes this record. This cannot be undone.</p>
@@ -851,6 +873,7 @@ function SettingsTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh:
           </div>
         )}
       </Card>
+      ) : null}
     </div>
   );
 }
@@ -866,13 +889,24 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 export function InstanceDetailsPage(): React.JSX.Element {
-  const { id } = useParams<{ id: string }>();
-  const [tab, setTab] = React.useState<TabId>("overview");
+  const { id, tabId } = useParams<{ id: string; tabId?: string }>();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const tab: TabId = TABS.some((t) => t.id === tabId) ? (tabId as TabId) : "overview";
   const { detail, error, loading, load } = useInstance(id);
 
   const refresh = React.useCallback(() => {
     void load();
   }, [load]);
+
+  const selectTab = React.useCallback(
+    (next: TabId) => {
+      if (!id) return;
+      navigate(`/instances/${id}/${next}`);
+    },
+    [id, navigate]
+  );
 
   return (
     <div>
@@ -908,7 +942,7 @@ export function InstanceDetailsPage(): React.JSX.Element {
                 aria-selected={tab === t.id}
                 aria-controls={`panel-${t.id}`}
                 id={`tab-${t.id}`}
-                onClick={() => setTab(t.id)}
+                onClick={() => selectTab(t.id)}
                 className={`whitespace-nowrap px-3 py-2 text-sm ${
                   tab === t.id
                     ? "border-b-2 border-primary font-medium text-primary"
@@ -920,11 +954,13 @@ export function InstanceDetailsPage(): React.JSX.Element {
             ))}
           </div>
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+            <TabErrorBoundary key={tab}>
             {tab === "overview" && <OverviewTab detail={detail} onRefresh={refresh} />}
             {tab === "console" && <ConsoleTab instanceId={detail.instance.id} />}
-            {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} />}
+            {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
             {tab === "network" && <NetworkTab detail={detail} />}
-            {tab === "settings" && <SettingsTab detail={detail} onRefresh={refresh} />}
+            {tab === "settings" && <SettingsTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
+            </TabErrorBoundary>
           </div>
         </div>
       ) : null}
