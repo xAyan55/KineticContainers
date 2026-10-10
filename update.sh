@@ -52,17 +52,24 @@ if npm approve-scripts --help >/dev/null 2>&1; then
   npm rebuild argon2 better-sqlite3 node-pty >/dev/null 2>&1 || true
 fi
 
-# The console tab needs the node-pty native binding. Verify it actually loads
-# and repair it (build tools + rebuild) instead of silently shipping without it.
-if ! (cd "$DIR/server" && node -e "require('node-pty')" >/dev/null 2>&1); then
-  warn "node-pty binding not usable — installing build tools and rebuilding ..."
+# The console tab needs the node-pty native binding. Verify it actually loads.
+# npm will not retry a previously skipped optional dependency on its own, so
+# a missing/broken directory must be cleared and explicitly reinstalled.
+check_pty() {
+  (cd "$DIR/server" && node -e "require('node-pty')" >/dev/null 2>&1)
+}
+
+if ! check_pty; then
+  warn "node-pty binding not usable — installing build tools and (re)installing ..."
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential python3 || true
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y -q gcc-c++ make python3 || true
   fi
+  rm -rf "$DIR/server/node_modules/node-pty"
+  npm install --no-save --workspace=server node-pty --no-audit --no-fund >/dev/null 2>&1 || true
   npm rebuild node-pty >/dev/null 2>&1 || true
-  if (cd "$DIR/server" && node -e "require('node-pty')" >/dev/null 2>&1); then
+  if check_pty; then
     info "node-pty binding repaired."
   else
     warn "node-pty still unavailable — the console tab will report unsupported until it builds."
