@@ -612,7 +612,9 @@ verify_local_node_via_dist() {
     return 1
   fi
   local tmp out rc=0
-  tmp="$(mktemp)"
+  # NOTE: the helper must live inside server/ (not /tmp): bare require()
+  # calls resolve relative to the script's own directory, not the cwd.
+  tmp="$REPO_ROOT/server/.kct-tmp-$$.cjs"
   cat > "$tmp" <<'EOF'
 const path = require("path");
 const dotenv = require("dotenv");
@@ -718,7 +720,9 @@ repair_vps_only() {
     (cd "$REPO_ROOT" && npm run build --workspace=server) || die "Backend build failed."
   fi
   local tmp out rc=0
-  tmp="$(mktemp)"
+  # NOTE: same as above — the helper must live inside server/ so that bare
+  # require() calls resolve against the backend's node_modules, not /tmp.
+  tmp="$REPO_ROOT/server/.kct-tmp-$$.cjs"
   cat > "$tmp" <<'EOF'
 const path = require("path");
 const dotenv = require("dotenv");
