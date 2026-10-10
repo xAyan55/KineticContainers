@@ -30,7 +30,7 @@ The installer asks for every setting (port, admin email/password, session lifeti
 | `--no-service` | Skip the systemd service prompt. |
 | `--skip-lxc` | Skip automatic LXC host setup (panel only). |
 | `--setup-lxc-only` | Only configure LXC on this host for an EXISTING installation (see below). Requires root. |
-| `--repair` | Reconcile EXISTING managed VPS configs (limits, affinity, LXCFS include, btrfs quotas). Never touches `.env`, users, settings, ports, or service config. Requires root. |
+| `--repair` | Reconcile EXISTING managed VPS configs (limits, affinity, LXCFS include, btrfs/ext4 quotas). Never touches `.env`, users, settings, ports, or service config. Requires root. |
 | `--probe` | Run a full create/start/stop/destroy probe container during verification. |
 | `--start` | Launch the server in the foreground when finished. |
 | `--dir DIR` / `--branch NAME` | Control where the auto-clone goes / which branch it uses. |
@@ -77,7 +77,7 @@ The installer checks every binary above by name, executes `--version` on the cor
 
 Each VPS gets a **hard CPU quota** (`cpu.max` / `cfs_quota_us`) plus a **shared CPU affinity set** (`cpuset.cpus`, sized to the vCPU allocation) and a **hard memory limit** (`memory.max` / `limit_in_bytes`), written to the container config, verified by read-back, and live-applied when running. Cores are shared with the host — KineticCT never claims dedicated physical cores. Affinity sets make guest-visible CPU enumeration (`nproc`, Neofetch) match the allocation; **LXCFS** (installed and enabled automatically on Debian/Ubuntu) provides container-aware `/proc/meminfo`, `/proc/cpuinfo`, `/proc/stat`, `/proc/uptime`, `/proc/swaps`, and `/sys/devices/system/cpu/online` views. Without LXCFS, guests show host resource info — the Nodes readiness checklist and each VPS Resources tab report this honestly.
 
-Storage depends on the detected backend: containers on **btrfs subvolumes** get real enforced quotas (`btrfs qgroup limit`, verified by read-back); plain directories (the default) have no quota mechanism, so the panel records the allocation, shows real measured usage, and states that quotas are unenforced. Guest `df` shows filesystem totals even under quota — the UI shows the enforced quota separately and explains the distinction.
+Storage depends on the detected backend: containers on **btrfs subvolumes** get real enforced quotas (`btrfs qgroup limit`, verified by read-back); containers on **ext4 with project quotas enabled** get real enforced quotas (`setquota -P`, verified by read-back); plain directories without quota support have no enforcement mechanism, so the panel records the allocation, shows real measured usage, and states that quotas are unenforced. Guest `df` shows filesystem totals even under quota — the UI shows the enforced quota separately and explains the distinction. The installer enables ext4 project quotas (feature flag, live remount, fstab persistence with backup) automatically on Debian/Ubuntu; other filesystems (XFS/ZFS without managed datasets) are detected and reported as unsupported rather than faked.
 
 ### Repairing existing VPS
 
@@ -87,11 +87,11 @@ If containers were created before limits were enforced (or drifted), reconcile t
 cd /root/KineticContainers && git pull --ff-only && ./install.sh --repair
 ```
 
-Repair compares each managed container against its allocation, backs up its config once (`config.kct-bak`, never overwritten), re-applies CPU/memory/affinity, adds the LXCFS include, and enforces btrfs quotas where supported — then reports per-container results and whether a restart is needed. The same plan/apply flow is available per-VPS from the Resources tab ("Check for drift" / "Apply repair").
+Repair compares each managed container against its allocation, backs up its config once (`config.kct-bak`, never overwritten), re-applies CPU/memory/affinity, adds the LXCFS include, and enforces quotas where supported (btrfs subvolumes, ext4 project quotas) — then reports per-container results and whether a restart is needed. The same plan/apply flow is available per-VPS from the Resources tab ("Check for drift" / "Apply repair").
 
 ### VPS management and console
 
-Each VPS has a dedicated page at `/instances/:id` (linked from the dashboard via its name or **Manage**) with Overview, Console, Resources, Network, and Settings tabs. Power actions are confirmed against the live container state before the database is updated; CPU/memory limits are enforced through host cgroup settings (v1 or v2, detected automatically); disk quotas are **not** enforced by the directory backend and the UI says so.
+Each VPS has a dedicated page at `/instances/:id` (linked from the dashboard via its name or **Manage**) with Overview, Console, Resources, Network, and Settings tabs. Power actions are confirmed against the live container state before the database is updated; CPU/memory limits are enforced through host cgroup settings (v1 or v2, detected automatically); disk quotas are enforced where the storage backend supports them (btrfs subvolumes, ext4 project quotas) and otherwise reported as unenforced — never faked.
 
 The Console tab attaches to the running container via `lxc-attach` over an authenticated WebSocket (`node-pty` required on the host — it is an optional dependency, and the tab reports honestly when it is missing). Sessions enforce ownership, expire after 15 minutes idle, and never reach the host shell.
 

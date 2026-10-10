@@ -9,9 +9,13 @@ import {
   LocalLxcProvider,
   applyResourceLimits,
   containerExistsOnHost,
+  containerRootfsPath,
+  enforceBtrfsQuota,
+  enforceExt4Quota,
   getContainerMetrics,
   getContainerNetwork,
   getContainerStorage,
+  isBtrfsSubvolume,
   isLxcfsActiveForContainer,
   planInstanceRepair,
   readContainerState,
@@ -212,7 +216,7 @@ const resourcesSchema = z
     message: "No resource changes provided.",
   });
 
-/** Update enforced CPU/memory limits. Storage quotas are honestly unsupported. */
+/** Update enforced limits. CPU/memory via cgroups; storage only where quotas are enforceable. */
 instancesRouter.patch("/:id/resources", validate(resourcesSchema), async (req, res) => {
   const db = getDb();
   const row = getOwnedInstance(db, req.params.id, req.user!.id);
@@ -224,22 +228,56 @@ instancesRouter.patch("/:id/resources", validate(resourcesSchema), async (req, r
     res.status(409).json({ error: { code: "NO_NODE", message: "Instance is not attached to a configured node." } });
     return;
   }
+  const storageGb =
+    (req.body.storage_gb as number | undefined) ?? (row.storage_gb as number);
   if (req.body.storage_gb !== undefined && req.body.storage_gb !== row.storage_gb) {
-    res.status(400).json({
-      error: {
-        code: "STORAGE_IMMUTABLE",
-        message: "Disk quotas are not enforced by the directory storage backend and cannot be changed.",
-      },
-    });
-    return;
+    // Disk changes are only accepted where a quota can actually be enforced;
+    // otherwise the recorded value would become a lie.
+    try {
+      const storage = await getContainerStorage(row.container_id as string);
+      if (!storage.quotaSupported) {
+        res.status(400).json({
+          error: {
+            code: "STORAGE_IMMUTABLE",
+            message: `Disk quotas cannot be enforced on this backend (${storage.backend}): ${storage.note}`,
+          },
+        });
+        return;
+      }
+      if (storage.backend === "btrfs") {
+        const rootfs = containerRootfsPath(row.container_id as string);
+        if (!(await isBtrfsSubvolume(rootfs))) {
+          res.status(400).json({
+            error: { code: "STORAGE_IMMUTABLE", message: "btrfs quota needs a subvolume layout; this rootfs is a plain directory." },
+          });
+          return;
+        }
+        await enforceBtrfsQuota(rootfs, storageGb);
+      } else if (storage.backend === "ext4") {
+        await enforceExt4Quota(
+          containerRootfsPath(row.container_id as string),
+          row.container_id as string,
+          storageGb
+        );
+      } else {
+        res.status(400).json({
+          error: { code: "STORAGE_IMMUTABLE", message: `Disk quotas cannot be enforced on backend '${storage.backend}'.` },
+        });
+        return;
+      }
+    } catch (err) {
+      providerError(res, err);
+      return;
+    }
   }
   const cpu = (req.body.cpu as number | undefined) ?? (row.cpu as number);
   const memoryMb = (req.body.memory_mb as number | undefined) ?? (row.memory_mb as number);
   try {
     const result = await applyResourceLimits(row.container_id as string, { cpu, memoryMb });
-    db.prepare("UPDATE instances SET cpu = ?, memory_mb = ?, updated_at = ? WHERE id = ?").run(
+    db.prepare("UPDATE instances SET cpu = ?, memory_mb = ?, storage_gb = ?, updated_at = ? WHERE id = ?").run(
       cpu,
       memoryMb,
+      storageGb,
       nowIso(),
       row.id as string
     );
@@ -248,12 +286,12 @@ instancesRouter.patch("/:id/resources", validate(resourcesSchema), async (req, r
       action: "instance.resources_update",
       targetType: "instance",
       targetId: row.id as string,
-      detail: { cpu, memory_mb: memoryMb, liveApplied: result.liveApplied },
+      detail: { cpu, memory_mb: memoryMb, storage_gb: storageGb, liveApplied: result.liveApplied },
     });
     const effective = await readEffectiveConfig(row.container_id as string).catch(() => null);
     res.json({
       data: {
-        instance: toPublic({ ...row, cpu, memory_mb: memoryMb }),
+        instance: toPublic({ ...row, cpu, memory_mb: memoryMb, storage_gb: storageGb }),
         liveApplied: result.liveApplied,
         restartRequired: result.restartRequired,
         cgroupVersion: result.cgroupVersion,

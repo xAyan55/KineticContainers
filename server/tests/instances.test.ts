@@ -19,10 +19,13 @@ import {
   parseDfFstype,
   parseBtrfsSubvolId,
   parseBtrfsQgroupLimit,
+  parseRepquotaProject,
+  parseTune2fsQuotaFeatures,
+  parseMountOptions,
+  deriveProjectId,
+  gbToQuotaBlocks,
   sanitizeMetric,
   lxcfsIncludePresent,
-  planInstanceRepair,
-  checkHostCapacity,
   applyResourceLimits,
   readEffectiveConfig,
   planInstanceRepair,
@@ -268,6 +271,64 @@ describe("storage backend detection", () => {
   });
 });
 
+describe("ext4 project quotas", () => {
+  const REPQUOTA = `*** Report for project quotas on device /dev/sda1
+Block grace time: 7days; Inode grace time: 7days
+                        Space limits                File limits
+Project         used    soft    hard  grace    used  soft  hard grace
+----------------------------------------------------------------------
+#0        --  123456       0       0              10     0     0
+#100042   --    1024 10485760 20971520              5     0     0
+#100043   --       0       0       0              0     0     0
+`;
+
+  it("reads project quota rows and rejects unlimited/garbage", () => {
+    expect(parseRepquotaProject(REPQUOTA, 100042)).toEqual({ usedKb: 1024, softKb: 10485760, hardKb: 20971520 });
+    expect(parseRepquotaProject(REPQUOTA, 100043)).toEqual({ usedKb: 0, softKb: 0, hardKb: 0 });
+    expect(parseRepquotaProject(REPQUOTA, 999999)).toBeNull();
+    expect(parseRepquotaProject("garbage\n", 100042)).toBeNull();
+    expect(parseRepquotaProject("", 100042)).toBeNull();
+  });
+
+  it("detects the quota filesystem feature", () => {
+    expect(parseTune2fsQuotaFeatures("Filesystem features: has_journal ext_attr quota\n")).toBe(true);
+    expect(parseTune2fsQuotaFeatures("Filesystem features: has_journal ext_attr\n")).toBe(false);
+    expect(parseTune2fsQuotaFeatures("no features line\n")).toBe(false);
+    expect(parseTune2fsQuotaFeatures("")).toBe(false);
+  });
+
+  it("reads mount options for an exact mountpoint only", () => {
+    const mounts = "/dev/sda1 / ext4 rw,relatime,errors=remount-ro 0 1\n/dev/sda1 /var/lib/lxc ext4 rw,relatime,prjquota 0 0\n";
+    expect(parseMountOptions(mounts, "/var/lib/lxc")).toEqual(["rw", "relatime", "prjquota"]);
+    expect(parseMountOptions(mounts, "/")).toEqual(["rw", "relatime", "errors=remount-ro"]);
+    expect(parseMountOptions(mounts, "/var/lib/lxcfoo")).toBeNull();
+    expect(parseMountOptions(mounts, "/missing")).toBeNull();
+    expect(parseMountOptions("", "/")).toBeNull();
+  });
+
+  it("derives deterministic collision-free project ids in range", () => {
+    const a = deriveProjectId("web-01", []);
+    const b = deriveProjectId("web-01", []);
+    expect(a).toBe(b);
+    expect(a).toBeGreaterThanOrEqual(100000);
+    expect(a).toBeLessThan(150000);
+    expect(deriveProjectId("web-02", [a])).not.toBe(a);
+    // Full circle still terminates inside the range.
+    const taken = Array.from({ length: 49999 }, (_, i) => 100000 + i);
+    const last = deriveProjectId("zzz", taken);
+    expect(last).toBeGreaterThanOrEqual(100000);
+    expect(last).toBeLessThan(150000);
+  });
+
+  it("converts GB to quota blocks and validates range", () => {
+    expect(gbToQuotaBlocks(20)).toBe(20 * 1024 * 1024);
+    expect(gbToQuotaBlocks(1)).toBe(1024 * 1024);
+    expect(() => gbToQuotaBlocks(0)).toThrowError(ProviderError);
+    expect(() => gbToQuotaBlocks(2001)).toThrowError(ProviderError);
+    expect(() => gbToQuotaBlocks(1.5)).toThrowError(ProviderError);
+  });
+});
+
 describe("host capacity admission", () => {
   it("refuses requests that provably exceed free capacity", () => {
     expect(() =>
@@ -418,6 +479,17 @@ describe("instance API honesty and isolation", () => {
     expect(row.cpu).toBe(2);
     expect(row.memory_mb).toBe(2048);
     expect(applied.body.data.report.backupPath).toBeNull();
+  });
+
+  it("reports storage facts honestly when the backend is unreadable", async () => {
+    const aliceAgent = await login("alice@test.local", "AlicePass12345");
+    const res = await aliceAgent.get(`/api/instances/${aliceInstance}/config`);
+    // No container tooling on the test box: config read fails honestly.
+    expect([200, 404, 502]).toContain(res.status);
+    if (res.status === 200) {
+      expect(typeof res.body.data.effective.storageEnforced).toBe("boolean");
+      expect(typeof res.body.data.effective.storageNote).toBe("string");
+    }
   });
 
   it("validates resource updates before touching the host", async () => {

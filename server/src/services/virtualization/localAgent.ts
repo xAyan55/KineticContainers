@@ -5,7 +5,7 @@ import type {
   VirtualizationProvider,
 } from "./provider.js";
 import { ProviderError } from "./provider.js";
-import { parseLxcLs, runHostTool, runLxc } from "./host.js";
+import { parseLxcLs, runHostTool, runLxc, runQuotaTool } from "./host.js";
 import { getDb } from "../../db.js";
 import os from "node:os";
 import fs from "node:fs";
@@ -622,7 +622,7 @@ export async function isLxcfsActiveForContainer(containerId: string): Promise<bo
 // never invented. btrfs subvolume quotas are enforced for real.
 // ---------------------------------------------------------------------------
 
-export type StorageBackend = "btrfs" | "dir" | "unknown";
+export type StorageBackend = "btrfs" | "ext4" | "xfs" | "zfs" | "dir" | "unknown";
 
 export function containerRootfsPath(containerId: string): string {
   validateContainerId(containerId);
@@ -647,9 +647,13 @@ export async function detectStorageBackend(containerId: string): Promise<Storage
   const rootfs = containerRootfsPath(containerId);
   try {
     const { stdout } = await runHostTool("df", ["-P", "-T", rootfs], { timeoutMs: 15000 });
-    const fstype = parseDfFstype(stdout, rootfs);
+    const fstype = (parseDfFstype(stdout, rootfs) ?? "").toLowerCase();
     if (fstype === "btrfs") return "btrfs";
-    return "dir";
+    if (fstype === "ext4" || fstype === "ext3" || fstype === "ext2") return "ext4";
+    if (fstype === "xfs") return "xfs";
+    if (fstype === "zfs") return "zfs";
+    if (fstype) return "dir";
+    return "unknown";
   } catch {
     return "unknown";
   }
@@ -744,6 +748,308 @@ export async function enforceBtrfsQuota(rootfsPath: string, sizeGb: number): Pro
   return verified;
 }
 
+// ---------------------------------------------------------------------------
+// ext4 project quotas. Plain directories have no quota mechanism, but ext4
+// project quotas attach a real enforced byte limit to a directory tree —
+// no repartitioning, no migration, no touching other data.
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse `repquota -P <mount>` output for one project id.
+ * Columns: project used soft hard grace (1K blocks). Pure and tested.
+ */
+export function parseRepquotaProject(
+  output: string,
+  projid: number
+): { usedKb: number; softKb: number; hardKb: number } | null {
+  const want = `#${projid}`;
+  for (const raw of output.split("\n")) {
+    const parts = raw.trim().split(/\s+/);
+    if (parts.length < 5 || (parts[0] !== want && parts[0] !== String(projid))) continue;
+    const nums: number[] = [];
+    for (const p of parts.slice(1)) {
+      if (/^\d+$/.test(p)) {
+        nums.push(Number(p));
+        if (nums.length === 3) break;
+      }
+    }
+    if (nums.length < 3) return null;
+    const [usedKb, softKb, hardKb] = nums as [number, number, number];
+    if (![usedKb, softKb, hardKb].every((n) => Number.isSafeInteger(n) && n >= 0)) return null;
+    return { usedKb, softKb, hardKb };
+  }
+  return null;
+}
+
+/** True when tune2fs output lists the quota filesystem feature. Pure + tested. */
+export function parseTune2fsQuotaFeatures(output: string): boolean {
+  const m = output.match(/^\s*Filesystem features:\s*(.+)$/m);
+  if (!m) return false;
+  return m[1].split(/\s+/).includes("quota");
+}
+
+/** Mount options for an exact mountpoint from mount-table text. Pure + tested. */
+export function parseMountOptions(mountsText: string, mountpoint: string): string[] | null {
+  for (const raw of mountsText.split("\n")) {
+    const parts = raw.trim().split(/\s+/);
+    if (parts.length < 4 || parts[1] !== mountpoint) continue;
+    return parts[3].split(",").map((o) => o.trim()).filter(Boolean);
+  }
+  return null;
+}
+
+function fnv1a32(input: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+/**
+ * Deterministic project id in [100000, 149999], skipping ids already taken.
+ * Deterministic so re-runs converge instead of leaking ids; collisions are
+ * resolved by probing, never by touching another container's tree.
+ */
+export function deriveProjectId(containerId: string, taken: number[]): number {
+  const base = 100000 + (fnv1a32(containerId) % 50000);
+  const used = new Set(taken.filter((n) => Number.isInteger(n)));
+  for (let i = 0; i < 50000; i++) {
+    const candidate = 100000 + ((base - 100000 + i) % 50000);
+    if (!used.has(candidate)) return candidate;
+  }
+  throw new ProviderError("QUOTA_FAILED", "No free project id available for quota assignment.");
+}
+
+/** 1K-block units used by setquota/repquota. Pure and tested. */
+export function gbToQuotaBlocks(sizeGb: number): number {
+  if (!Number.isInteger(sizeGb) || sizeGb < 1 || sizeGb > 2000) {
+    throw new ProviderError("INVALID_RESOURCES", "Storage allocation out of range (1-2000).", 400);
+  }
+  return sizeGb * 1024 * 1024;
+}
+
+/** Resolve the mountpoint backing a path (follows symlinks like findmnt does). */
+export async function getMountpointForPath(fsPath: string): Promise<string | null> {
+  try {
+    const { stdout } = await runQuotaTool("findmnt", ["-n", "-o", "TARGET", "--target", fsPath], { timeoutMs: 15000 });
+    const target = stdout.trim().split("\n").pop()?.trim() ?? "";
+    return target ? target.slice(0, 256) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Block device backing a mountpoint, or null. */
+export async function getDeviceForMount(mountpoint: string): Promise<string | null> {
+  try {
+    const { stdout } = await runQuotaTool("findmnt", ["-n", "-o", "SOURCE", mountpoint], { timeoutMs: 15000 });
+    const src = stdout.trim().split("\n").pop()?.trim() ?? "";
+    if (!src || !src.startsWith("/dev/")) return null;
+    return src.slice(0, 128);
+  } catch {
+    return null;
+  }
+}
+
+export interface Ext4QuotaState {
+  capable: boolean;
+  reason: string | null;
+  mountpoint: string | null;
+  device: string | null;
+  prjquotaActive: boolean;
+}
+
+/** Inspect whether project quotas can work on the filesystem behind a path. */
+export async function ext4QuotaState(fsPath: string): Promise<Ext4QuotaState> {
+  const mountpoint = await getMountpointForPath(fsPath);
+  if (!mountpoint) {
+    return { capable: false, reason: "Could not resolve a mountpoint.", mountpoint: null, device: null, prjquotaActive: false };
+  }
+  let mountsText = "";
+  try {
+    mountsText = fs.readFileSync("/proc/mounts", "utf8");
+  } catch {
+    return { capable: false, reason: "Could not read the mount table.", mountpoint, device: null, prjquotaActive: false };
+  }
+  const opts = parseMountOptions(mountsText, mountpoint);
+  if (opts !== null && (opts.includes("prjquota") || opts.includes("quota"))) {
+    return { capable: true, reason: null, mountpoint, device: null, prjquotaActive: true };
+  }
+  const device = await getDeviceForMount(mountpoint);
+  if (!device) {
+    return { capable: false, reason: "No block device found for this mount; cannot enable quotas.", mountpoint, device: null, prjquotaActive: false };
+  }
+  let hasFeature = false;
+  try {
+    const { stdout } = await runQuotaTool("tune2fs", ["-l", device], { timeoutMs: 15000 });
+    hasFeature = parseTune2fsQuotaFeatures(stdout);
+  } catch {
+    hasFeature = false;
+  }
+  if (!hasFeature) {
+    return { capable: true, reason: "Filesystem lacks the quota feature (enable with tune2fs -O quota).", mountpoint, device, prjquotaActive: false };
+  }
+  return { capable: true, reason: "prjquota mount option not active yet.", mountpoint, device, prjquotaActive: false };
+}
+
+/**
+ * Enable project quotas on an ext4 mount: filesystem feature, live remount,
+ * and fstab persistence (backed up once, verified with findmnt --verify and
+ * restored on failure). Never reformats, never migrates data.
+ */
+export async function ensureExt4ProjectQuota(mountpoint: string): Promise<void> {
+  const state = await ext4QuotaState(mountpoint);
+  if (state.prjquotaActive) return;
+  if (!state.capable || !state.device) {
+    throw new ProviderError("QUOTA_UNSUPPORTED", state.reason ?? "Project quotas cannot be enabled here.");
+  }
+  try {
+    const { stdout } = await runQuotaTool("tune2fs", ["-l", state.device], { timeoutMs: 15000 });
+    if (!parseTune2fsQuotaFeatures(stdout)) {
+      await runQuotaTool("tune2fs", ["-O", "quota", state.device], { timeoutMs: 60000 });
+    }
+  } catch (err) {
+    throw err instanceof ProviderError ? err : new ProviderError("QUOTA_FAILED", "Could not enable the quota filesystem feature.");
+  }
+  try {
+    await runQuotaTool("mount", ["-o", "remount,prjquota", mountpoint], { timeoutMs: 60000 });
+  } catch {
+    throw new ProviderError("QUOTA_FAILED", "Could not remount with project quotas (prjquota).");
+  }
+  // Persist across reboots: append ,prjquota to the exact fstab entry.
+  const fstab = "/etc/fstab";
+  const backup = "/etc/fstab.kct-bak";
+  let original: string;
+  try {
+    original = fs.readFileSync(fstab, "utf8");
+  } catch {
+    throw new ProviderError("QUOTA_FAILED", "Remounted live, but /etc/fstab is unreadable so reboot persistence is unverified.");
+  }
+  const lines = original.split("\n");
+  let changed = false;
+  const next = lines
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) return line;
+      const fields = line.split(/\s+/);
+      if (fields.length < 4 || fields[1] !== mountpoint) return line;
+      const opts = fields[3].split(",");
+      if (opts.includes("prjquota") || opts.includes("quota")) return line;
+      fields[3] = [...opts, "prjquota"].join(",");
+      changed = true;
+      return fields.join("\t");
+    })
+    .join("\n");
+  if (changed) {
+    try {
+      if (!fs.existsSync(backup)) fs.copyFileSync(fstab, backup);
+      fs.writeFileSync(fstab, next, "utf8");
+      await runQuotaTool("findmnt", ["--verify"], { timeoutMs: 15000 });
+    } catch {
+      try {
+        if (fs.existsSync(backup)) fs.copyFileSync(backup, fstab);
+      } catch {
+        /* best effort restore */
+      }
+      throw new ProviderError("QUOTA_FAILED", "fstab persistence failed verification; original restored.");
+    }
+  }
+  const recheck = await ext4QuotaState(mountpoint);
+  if (!recheck.prjquotaActive) {
+    throw new ProviderError("QUOTA_FAILED", "Project quotas still inactive after enablement.");
+  }
+}
+
+/** Project id currently stamped on a directory (lsattr -p), or null. */
+export async function getProjectIdForPath(dirPath: string): Promise<number | null> {
+  try {
+    const { stdout } = await runQuotaTool("lsattr", ["-p", "-d", dirPath], { timeoutMs: 15000 });
+    const m = stdout.trim().match(/^(\d+)\s/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isSafeInteger(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Stamp a project id across a container tree (idempotent for same id). */
+export async function assignProjectId(rootfsPath: string, projid: number): Promise<void> {
+  if (!Number.isSafeInteger(projid) || projid < 0) {
+    throw new ProviderError("INVALID_RESOURCES", "Invalid project id.", 400);
+  }
+  await runQuotaTool("chattr", ["-R", "-p", String(projid), rootfsPath], { timeoutMs: 120000 });
+}
+
+/** Set a hard project quota and verify it stuck via repquota read-back. */
+export async function setProjectQuota(mountpoint: string, projid: number, sizeGb: number): Promise<number> {
+  const blocks = gbToQuotaBlocks(sizeGb);
+  await runQuotaTool("setquota", ["-P", String(projid), String(blocks), String(blocks), "0", "0", mountpoint], {
+    timeoutMs: 60000,
+  });
+  const verified = await readProjectQuotaGb(mountpoint, projid);
+  if (verified === null || Math.abs(verified - sizeGb) > Math.max(0.5, sizeGb * 0.05)) {
+    throw new ProviderError("QUOTA_VERIFY_FAILED", "Set a project quota but read-back verification failed.");
+  }
+  return verified;
+}
+
+/** Read the enforced hard quota (GB) for a project id, or null when none. */
+export async function readProjectQuotaGb(mountpoint: string, projid: number): Promise<number | null> {
+  try {
+    const { stdout } = await runQuotaTool("repquota", ["-P", mountpoint], { timeoutMs: 15000 });
+    const row = parseRepquotaProject(stdout, projid);
+    if (!row || row.hardKb <= 0) return null;
+    return Math.round((row.hardKb / (1024 * 1024)) * 100) / 100;
+  } catch {
+    return null;
+  }
+}
+
+/** Project ids already stamped on sibling container trees (collision avoidance). */
+export async function collectSiblingProjectIds(containerId: string): Promise<number[]> {
+  const ids: number[] = [];
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(lxcRoot());
+  } catch {
+    return ids;
+  }
+  for (const name of names) {
+    if (name === containerId || name.startsWith(".")) continue;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}$/.test(name)) continue;
+    try {
+      const id = await getProjectIdForPath(path.join(lxcRoot(), name, "rootfs"));
+      if (id !== null && id >= 100000) ids.push(id);
+    } catch {
+      /* best effort per sibling */
+    }
+  }
+  return ids;
+}
+
+/**
+ * Full ext4 enforcement for one container tree: enable accounting, assign a
+ * collision-free project id, set the hard limit, verify by read-back.
+ */
+export async function enforceExt4Quota(rootfsPath: string, containerId: string, sizeGb: number): Promise<{ projid: number; quotaGb: number }> {
+  validateContainerId(containerId);
+  gbToQuotaBlocks(sizeGb); // validates range first
+  const mountpoint = await getMountpointForPath(rootfsPath);
+  if (!mountpoint) throw new ProviderError("QUOTA_FAILED", "Could not resolve the filesystem for quota enforcement.");
+  await ensureExt4ProjectQuota(mountpoint);
+  const existing = await getProjectIdForPath(rootfsPath);
+  const taken = await collectSiblingProjectIds(containerId);
+  const projid = existing !== null && existing >= 100000 ? existing : deriveProjectId(containerId, taken);
+  if (existing === null || existing < 100000) {
+    await assignProjectId(rootfsPath, projid);
+  }
+  const quotaGb = await setProjectQuota(mountpoint, projid, sizeGb);
+  return { projid, quotaGb };
+}
+
 export interface StorageInfo {
   backend: StorageBackend;
   quotaSupported: boolean;
@@ -752,7 +1058,7 @@ export interface StorageInfo {
   note: string;
 }
 
-/** Real storage facts: backend detection, enforced quota (btrfs only), actual usage. */
+/** Real storage facts: backend detection, enforced quota (btrfs/ext4), actual usage. */
 export async function getContainerStorage(containerId: string): Promise<StorageInfo> {
   validateContainerId(containerId);
   const rootfs = containerRootfsPath(containerId);
@@ -784,6 +1090,57 @@ export async function getContainerStorage(containerId: string): Promise<StorageI
       quotaGb: null,
       usedGb,
       note: "Rootfs is a plain directory on btrfs (not a subvolume): per-container quotas need a subvolume layout.",
+    };
+  }
+  if (backend === "ext4") {
+    const mountpoint = await getMountpointForPath(rootfs);
+    const state = mountpoint ? await ext4QuotaState(mountpoint).catch(() => null) : null;
+    if (state && state.prjquotaActive) {
+      const projid = await getProjectIdForPath(rootfs).catch(() => null);
+      if (projid !== null && projid >= 100000 && mountpoint) {
+        const quotaGb = await readProjectQuotaGb(mountpoint, projid).catch(() => null);
+        if (quotaGb !== null) {
+          return {
+            backend,
+            quotaSupported: true,
+            quotaGb,
+            usedGb,
+            note: `Quota enforced via ext4 project quota (project ${projid}). Guest df shows filesystem totals, not the quota.`,
+          };
+        }
+        return {
+          backend,
+          quotaSupported: true,
+          quotaGb: null,
+          usedGb,
+          note: `ext4 project quotas active (project ${projid}) but no hard limit is set yet.`,
+        };
+      }
+      return {
+        backend,
+        quotaSupported: true,
+        quotaGb: null,
+        usedGb,
+        note: "ext4 project quotas are active on this filesystem but this container has no project id yet; run Repair.",
+      };
+    }
+    return {
+      backend,
+      quotaSupported: false,
+      quotaGb: null,
+      usedGb,
+      note: state?.reason
+        ? `ext4 project quotas unavailable: ${state.reason}`
+        : "ext4 project quotas are not enabled on this filesystem.",
+    };
+  }
+  if (backend === "xfs" || backend === "zfs") {
+    return {
+      backend,
+      quotaSupported: false,
+      quotaGb: null,
+      usedGb,
+      note: `${backend} project/dataset quotas are detected but not managed by this build; quotas stay unenforced.`,
     };
   }
   return {
@@ -989,14 +1346,15 @@ export async function planInstanceRepair(
   try {
     const storage = await getContainerStorage(containerId);
     if (storage.quotaSupported && storage.quotaGb === null) {
-      checks.push({ check: "storage", status: "needs-fix", detail: "btrfs subvolume without an enforced quota." });
+      const kind = storage.backend === "btrfs" ? "btrfs subvolume" : "ext4 directory tree";
+      checks.push({ check: "storage", status: "needs-fix", detail: `${kind} without an enforced quota.` });
     } else {
       checks.push({
         check: "storage",
         status: storage.quotaSupported ? "ok" : "unsupported",
         detail:
           storage.quotaSupported && storage.quotaGb !== null
-            ? `btrfs quota enforced at ${storage.quotaGb} GB (${storage.usedGb ?? "?"} GB used).`
+            ? `${storage.backend} quota enforced at ${storage.quotaGb} GB (${storage.usedGb ?? "?"} GB used).`
             : storage.note,
       });
     }
@@ -1119,7 +1477,8 @@ export async function repairInstance(
     }
   }
 
-  // Storage: report-only, except btrfs subvolume quotas which are enforceable.
+  // Storage: report-only, except quotas that are actually enforceable here
+  // (btrfs subvolumes, ext4 project quotas). Never migrates storage layouts.
   if (!need("storage")) {
     const ok = plan.checks.find((c) => c.check === "storage");
     checks.push({
@@ -1129,9 +1488,17 @@ export async function repairInstance(
     });
   } else {
     const rootfs = containerRootfsPath(containerId);
+    const backend = await detectStorageBackend(containerId).catch(() => "unknown" as const);
     try {
-      const enforced = await enforceBtrfsQuota(rootfs, dbLimits.storageGb);
-      checks.push({ check: "storage", status: "fixed", detail: `Enforced btrfs quota of ${enforced} GB on the container subvolume.` });
+      if (backend === "btrfs") {
+        const enforced = await enforceBtrfsQuota(rootfs, dbLimits.storageGb);
+        checks.push({ check: "storage", status: "fixed", detail: `Enforced btrfs quota of ${enforced} GB on the container subvolume.` });
+      } else if (backend === "ext4") {
+        const { quotaGb } = await enforceExt4Quota(rootfs, containerId, dbLimits.storageGb);
+        checks.push({ check: "storage", status: "fixed", detail: `Enforced ext4 project quota of ${quotaGb} GB on the container tree.` });
+      } else {
+        checks.push({ check: "storage", status: "unsupported", detail: `Backend '${backend}' has no safe quota mechanism here; left untouched.` });
+      }
     } catch (err) {
       checks.push({
         check: "storage",
@@ -1294,17 +1661,22 @@ export class LocalLxcProvider implements VirtualizationProvider {
       }
       // Apply and verify the requested resource limits on the real container.
       await applyResourceLimits(name, { cpu: request.cpu, memoryMb: request.memoryMb });
-      // LXCFS views for correct guest-visible resources (best effort: never
-      // fails creation when LXCFS is unavailable on the host).
-      await ensureLxcfsInclude(name).catch(() => "unavailable" as const);
-      // Enforce the disk quota where the backend supports it (btrfs only).
+      // Enforce the disk quota where the backend supports it. A quota failure
+      // fails creation loudly (with cleanup) rather than shipping a container
+      // whose recorded allocation is a lie.
       if (backing === "btrfs") {
         const rootfs = containerRootfsPath(name);
         if (await isBtrfsSubvolume(rootfs)) {
           await enforceBtrfsQuota(rootfs, request.storageGb);
         }
+      } else {
+        const backend = await detectStorageBackend(name).catch(() => "unknown" as const);
+        if (backend === "ext4") {
+          await enforceExt4Quota(containerRootfsPath(name), name, request.storageGb);
+        }
       }
-      // LXCFS views for correct guest-visible resources (best effort).
+      // LXCFS views for correct guest-visible resources (best effort: never
+      // fails creation when LXCFS is unavailable on the host).
       await ensureLxcfsInclude(name).catch(() => "unavailable" as const);
     } catch (err) {
       // Our own partial residue only: this name was verified absent above.

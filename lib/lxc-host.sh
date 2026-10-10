@@ -116,7 +116,7 @@ kct_distro_supported() { # $1 = os id, $2 = id_like; rc 0 when apt-based LXC set
 
 kct_lxc_packages() { # $1 = package manager; prints the package list or rc 1
   case "${1:-}" in
-    apt) printf 'lxc uidmap libpam-cgfs bridge-utils dnsmasq-base squashfs-tools wget ca-certificates gnupg' ;;
+    apt) printf 'lxc uidmap libpam-cgfs bridge-utils dnsmasq-base squashfs-tools wget ca-certificates gnupg quota' ;;
     *) return 1 ;;
   esac
 }
@@ -151,6 +151,24 @@ kct_lxcfs_serving() { # rc 0 when the FUSE view is mounted AND servable
 
 kct_lxcfs_include_present() { # rc 0 when the distro integration file exists
   [ -f "$(kct_path /usr/share/lxc/config/common.conf.d/00-lxcfs.conf)" ]
+}
+
+kct_mount_opts() { # $1 = mountpoint; prints its option list or rc 1
+  local mp="$1" line opts
+  [ -n "$mp" ] || return 1
+  line="$(grep -E "^[^ ]+ ${mp} " "$(kct_path /proc/mounts)" 2>/dev/null | head -n 1 || true)"
+  [ -n "$line" ] || return 1
+  opts="$(printf '%s' "$line" | awk '{print $4}')"
+  [ -n "$opts" ] || return 1
+  printf '%s' "$opts"
+}
+
+kct_fstab_entry() { # $1 = fstab path (relative to KCT_ROOT ok), $2 = mountpoint; prints dev|dir|type|opts
+  local f="$1" mp="$2" line
+  [ -n "$mp" ] || return 1
+  line="$(grep -vE '^[[:space:]]*#' "$f" 2>/dev/null | awk -v m="$mp" '$2==m{print; exit}' || true)"
+  [ -n "$line" ] || return 1
+  printf '%s' "$line" | awk '{printf "%s|%s|%s|%s", $1, $2, $3, $4}'
 }
 
 # ---------------------------------------------------------------------------
@@ -267,7 +285,7 @@ EOF
   kct_assert_rc "fedora unsupported" 1 kct_distro_supported fedora ""
   kct_assert_rc "empty unsupported" 1 kct_distro_supported "" ""
   kct_assert_eq "apt packages" \
-    "lxc uidmap libpam-cgfs bridge-utils dnsmasq-base squashfs-tools wget ca-certificates gnupg" \
+    "lxc uidmap libpam-cgfs bridge-utils dnsmasq-base squashfs-tools wget ca-certificates gnupg quota" \
     "$(kct_lxc_packages apt)"
   kct_assert_rc "dnf packages unsupported" 1 kct_lxc_packages dnf
 
@@ -279,6 +297,19 @@ EOF
   kct_assert_rc "template present" 0 kct_template_present
   rm -f "$root/usr/share/lxc/templates/lxc-download"
   kct_assert_rc "template absent" 1 kct_template_present
+
+  # --- mount options + fstab parsing (fixture mount tables) ---
+  printf '/dev/sda1 / ext4 rw,relatime,errors=remount-ro 0 1\n/dev/sda1 /var/lib/lxc ext4 rw,relatime,prjquota 0 0\n' > "$root/proc/mounts"
+  kct_assert_eq "mount opts exact match" "rw,relatime,prjquota" "$(kct_mount_opts /var/lib/lxc)"
+  kct_assert_eq "mount opts root" "rw,relatime,errors=remount-ro" "$(kct_mount_opts /)"
+  kct_assert_rc "mount opts no prefix collision" 1 kct_mount_opts /var/lib/lxcfoo
+  mv "$root/proc/mounts" "$root/proc/mounts.hidden"
+  kct_assert_rc "mount opts missing table" 1 kct_mount_opts /
+  mv "$root/proc/mounts.hidden" "$root/proc/mounts"
+  printf '# comment\nUUID=x / ext4 errors=remount-ro 0 1\n/dev/sda1 /var/lib/lxc ext4 defaults 0 0\n' > "$root/fstab"
+  kct_assert_eq "fstab entry" "/dev/sda1|/var/lib/lxc|ext4|defaults" "$(kct_fstab_entry "$root/fstab" /var/lib/lxc)"
+  kct_assert_rc "fstab entry missing" 1 kct_fstab_entry "$root/fstab" /nonexistent
+  kct_assert_rc "fstab no mountpoint" 1 kct_fstab_entry "$root/fstab" ""
 
   # --- lxcfs detection (fixture mount tables) ---
   mkdir -p "$root/proc" "$root/var/lib/lxcfs" "$root/usr/share/lxc/config/common.conf.d"

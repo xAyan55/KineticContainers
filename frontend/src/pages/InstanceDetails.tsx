@@ -427,8 +427,10 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
   const [error, setError] = React.useState<string | undefined>();
   const [cpu, setCpu] = React.useState(String(i.cpu));
   const [memoryMb, setMemoryMb] = React.useState(String(i.memory_mb));
+  const [diskGb, setDiskGb] = React.useState(String(i.storage_gb));
   const [saving, setSaving] = React.useState(false);
   const [result, setResult] = React.useState<string | undefined>();
+  const diskEditable = config?.storage?.quotaSupported === true;
 
   const loadConfig = React.useCallback(async () => {
     try {
@@ -475,7 +477,7 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
         liveApplied: boolean;
         restartRequired: boolean;
         cgroupVersion: string;
-      }>(`/api/instances/${i.id}/resources`, { cpu: Number(cpu), memory_mb: Number(memoryMb) });
+      }>(`/api/instances/${i.id}/resources`, { cpu: Number(cpu), memory_mb: Number(memoryMb), storage_gb: Number(diskGb) });
       setResult(
         data.liveApplied
           ? `Limits applied live (cgroup ${data.cgroupVersion}).`
@@ -556,7 +558,7 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
       </Card>
       <Card>
         <h2 className="mb-1 text-sm font-semibold text-primary">Change limits</h2>
-        <p className="mb-4 text-xs text-muted">CPU and memory are enforced through cgroup limits{config ? ` (${config.effective.cgroupVersion})` : ""} and applied live when the container runs. Disk quotas are unsupported on the directory backend.</p>
+        <p className="mb-4 text-xs text-muted">CPU and memory are enforced through cgroup limits{config ? ` (${config.effective.cgroupVersion})` : ""} and applied live when the container runs. {diskEditable ? "Disk quota is enforceable on this backend and can be changed below." : "Disk quotas are not enforceable on this backend."}</p>
         <form onSubmit={(e) => void save(e)} className="grid max-w-lg gap-4">
           <div>
             <Label htmlFor="res-cpu">CPU (vCPU, 1–32)</Label>
@@ -568,8 +570,12 @@ function ResourcesTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh
           </div>
           <div>
             <Label htmlFor="res-disk">Disk (GB)</Label>
-            <Input id="res-disk" type="number" value={i.storage_gb} disabled aria-describedby="disk-note" />
-            <p id="disk-note" className="mt-1 text-xs text-muted">Recorded only — the directory backend cannot enforce quotas.</p>
+            <Input id="res-disk" type="number" min={1} max={2000} value={diskGb} onChange={(e) => setDiskGb(e.target.value)} required disabled={saving || !diskEditable} aria-describedby="disk-note" />
+            <p id="disk-note" className="mt-1 text-xs text-muted">
+              {diskEditable
+                ? "Enforced as a real quota on this backend."
+                : "Recorded only — quotas cannot be enforced on this backend."}
+            </p>
           </div>
           <div>
             <Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save limits"}</Button>
@@ -926,7 +932,7 @@ export function InstanceDetailsPage(): React.JSX.Element {
         <Cpu className="h-3.5 w-3.5" aria-hidden="true" />
         <MemoryStick className="h-3.5 w-3.5" aria-hidden="true" />
         <HardDrive className="h-3.5 w-3.5" aria-hidden="true" />
-        <span>Configured limits are enforced through host cgroup settings; disk quotas are unsupported on the directory backend.</span>
+        <span>Configured limits are enforced through host cgroup settings; disk quotas apply only where the storage backend supports them (see Resources).</span>
       </div>
     </div>
   );

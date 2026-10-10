@@ -28,6 +28,24 @@ const LXC_ALLOWLIST = new Set([
  */
 const HOST_TOOL_ALLOWLIST = new Set(["df", "du", "btrfs"]);
 
+/**
+ * Privileged quota/storage tools. Same strict execution as runHostTool, but
+ * kept in a separate allowlist because these MUTATE host state (enabling
+ * quotas, setting limits, remounting). Every call site passes fully fixed
+ * argument vectors derived internally — never user input. Mutating calls
+ * additionally verify their effect by reading back afterwards.
+ */
+const QUOTA_TOOL_ALLOWLIST = new Set([
+  "tune2fs",
+  "findmnt",
+  "mount",
+  "setquota",
+  "repquota",
+  "quotaon",
+  "chattr",
+  "lsattr",
+]);
+
 export interface RunLxcOptions {
   timeoutMs?: number;
   /** Append bounded stderr to failure messages (useful for create failures). */
@@ -86,6 +104,19 @@ export function runLxc(cmd: string, args: string[], opts: RunLxcOptions = {}): P
  */
 export function runHostTool(cmd: string, args: string[], opts: RunLxcOptions = {}): Promise<{ stdout: string; stderr: string }> {
   if (!HOST_TOOL_ALLOWLIST.has(cmd)) {
+    return Promise.reject(new ProviderError("COMMAND_NOT_ALLOWED", `Command is not allowlisted: ${cmd}.`, 400));
+  }
+  return execFileStrict(cmd, args, opts.timeoutMs ?? TIMEOUT_MS, opts.includeStderr ?? false);
+}
+
+/**
+ * Run a privileged quota/storage tool (tune2fs/findmnt/mount/setquota/
+ * repquota/quotaon/chattr/lsattr). Same strict execution; call sites pass
+ * fixed argument vectors built from validated container paths only, and
+ * every mutation is verified by reading back afterwards.
+ */
+export function runQuotaTool(cmd: string, args: string[], opts: RunLxcOptions = {}): Promise<{ stdout: string; stderr: string }> {
+  if (!QUOTA_TOOL_ALLOWLIST.has(cmd)) {
     return Promise.reject(new ProviderError("COMMAND_NOT_ALLOWED", `Command is not allowlisted: ${cmd}.`, 400));
   }
   return execFileStrict(cmd, args, opts.timeoutMs ?? TIMEOUT_MS, opts.includeStderr ?? false);

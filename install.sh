@@ -225,6 +225,8 @@ LXC_HAS_LXC=0
 LXCFS_STATUS="pending"
 LXCFS_DETAIL=""
 LXCFS_CONTAINER="pending"
+QUOTA_STATUS="pending"
+QUOTA_DETAIL=""
 KCT_NODE_STATUS="unknown"
 KCT_NODE_DETAIL=""
 
@@ -340,6 +342,98 @@ setup_lxc_network() {
     return 0
   fi
   warn "lxc-net started but lxcbr0 did not appear."
+  return 1
+}
+
+# ext4 project quotas for real per-container disk limits. Best effort and
+# strictly additive: enables the quota feature, live-remounts prjquota,
+# persists via fstab (backed up once, verified, restored on failure). Never
+# reformats, repartitions, migrates data, or touches firewall rules.
+setup_ext4_project_quota() {
+  QUOTA_STATUS="unverified"
+  local lxc_path="/var/lib/lxc" fstype=""
+  if command -v df >/dev/null 2>&1; then
+    fstype="$(df -P -T "$lxc_path" 2>/dev/null | awk 'NR==2{print $2}')"
+  fi
+  if [ "$fstype" != "ext4" ] && [ "$fstype" != "ext3" ]; then
+    QUOTA_DETAIL="container path is on '${fstype:-unknown}', not ext4 — project quotas need ext4 (btrfs uses subvolumes)"
+    info "${QUOTA_DETAIL}."
+    return 1
+  fi
+  for tool in setquota repquota quotaon tune2fs findmnt; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      if [ "${PKG_MGR:-}" = "apt" ] || { detect_pkg_mgr && [ "$PKG_MGR" = "apt" ]; }; then
+        info "Installing quota tooling ..."
+        pkg_install quota || { QUOTA_DETAIL="quota package installation failed"; warn "${QUOTA_DETAIL}."; return 1; }
+        hash -r 2>/dev/null || true
+        break
+      fi
+      QUOTA_DETAIL="quota tools missing and no supported package manager (needs setquota/repquota)"
+      warn "${QUOTA_DETAIL}."
+      return 1
+    fi
+  done
+  local mountpoint device
+  mountpoint="$(findmnt -n -o TARGET --target "$lxc_path" 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
+  if [ -z "$mountpoint" ]; then
+    QUOTA_DETAIL="could not resolve the mountpoint for $lxc_path"
+    warn "${QUOTA_DETAIL}."
+    return 1
+  fi
+  if ! printf '%s' "$(kct_mount_opts "$mountpoint" 2>/dev/null || true)" | grep -qE '(^|,)prjquota(,|$)'; then
+    device="$(findmnt -n -o SOURCE "$mountpoint" 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
+    case "$device" in
+      /dev/*) ;;
+      *) QUOTA_DETAIL="no block device for $mountpoint — cannot enable quotas"; warn "${QUOTA_DETAIL}."; return 1 ;;
+    esac
+    if ! tune2fs -l "$device" 2>/dev/null | grep -qE 'Filesystem features:.*quota'; then
+      info "Enabling the quota filesystem feature on $device ..."
+      if ! run_root tune2fs -O quota "$device" >/dev/null 2>&1; then
+        QUOTA_DETAIL="tune2fs -O quota failed on $device"
+        warn "${QUOTA_DETAIL}."
+        return 1
+      fi
+    fi
+    info "Remounting $mountpoint with project quotas ..."
+    if ! run_root mount -o remount,prjquota "$mountpoint" >/dev/null 2>&1; then
+      QUOTA_DETAIL="live remount with prjquota failed on $mountpoint"
+      warn "${QUOTA_DETAIL}."
+      return 1
+    fi
+    # Persist across reboots: append ,prjquota to this mount's fstab entry.
+    # Staging file lives in $TMPDIR so no privilege is needed for redirection.
+    fstab_opts="$(awk -v m="$mountpoint" '$2==m && $0 !~ /^#/{print $4; exit}' /etc/fstab 2>/dev/null || true)"
+    if printf '%s' "$fstab_opts" | grep -qE '(^|,)prjquota(,|$)'; then
+      info "prjquota already persisted in /etc/fstab."
+    elif [ -z "$fstab_opts" ]; then
+      warn "No fstab entry for $mountpoint — live remount is active but will not survive reboot; add ,prjquota manually."
+    else
+      stage="$(mktemp)"
+      if awk -v m="$mountpoint" 'BEGIN{OFS="\t"} $2==m && $0 !~ /^#/ && $4 !~ /(^|,)prjquota(,|$)/ {$4=$4",prjquota"; c=1} {print} END{exit(c?0:1)}' /etc/fstab > "$stage" 2>/dev/null; then
+        if [ ! -f /etc/fstab.kct-bak ]; then
+          run_root cp -a /etc/fstab /etc/fstab.kct-bak >/dev/null 2>&1 || true
+        fi
+        if run_root cp "$stage" /etc/fstab >/dev/null 2>&1 && run_root findmnt --verify >/dev/null 2>&1; then
+          info "Persisted prjquota in /etc/fstab (backup at /etc/fstab.kct-bak, verified)."
+        else
+          warn "fstab persistence failed verification; restoring backup."
+          run_root cp -a /etc/fstab.kct-bak /etc/fstab >/dev/null 2>&1 || true
+        fi
+      else
+        warn "Could not stage the fstab persistence (live remount is still active)."
+      fi
+      rm -f "$stage"
+    fi
+  fi
+  if printf '%s' "$(kct_mount_opts "$mountpoint" 2>/dev/null || true)" | grep -qE '(^|,)prjquota(,|$)'; then
+    QUOTA_STATUS="ok"
+    QUOTA_DETAIL="project quotas active on $mountpoint"
+    LXC_EVIDENCE="${LXC_EVIDENCE}quotas: prjquota active on $mountpoint$(printf '\n')"
+    info "Project quotas active on $mountpoint — per-container disk limits enforceable."
+    return 0
+  fi
+  QUOTA_DETAIL="prjquota still inactive on $mountpoint after enablement"
+  warn "${QUOTA_DETAIL}."
   return 1
 }
 
@@ -558,6 +652,9 @@ setup_lxc_host() { # $1 = install|setup-only
   if ! setup_lxcfs; then
     info "Continuing without verified LXCFS views (guests will see host resource info)."
   fi
+  if ! setup_ext4_project_quota; then
+    info "Continuing without verified disk quotas (usage still measured honestly)."
+  fi
   if [ ! -f /etc/lxc/default.conf ]; then
     warn "No /etc/lxc/default.conf found; container creation may need explicit configuration."
   fi
@@ -681,6 +778,7 @@ print_lxc_report() {
   info "Packages:  ${LXC_PACKAGES}"
   info "Network:   ${LXC_NET}"
   info "LXCFS:     ${LXCFS_STATUS}${LXCFS_DETAIL:+ — $LXCFS_DETAIL}"
+  info "Quotas:    ${QUOTA_STATUS}${QUOTA_DETAIL:+ — $QUOTA_DETAIL}"
   if [ "$LXCFS_CONTAINER" != "pending" ]; then
     info "Probe:     ${LXC_PROBE} (guest LXCFS mounts: $LXCFS_CONTAINER)"
   else
