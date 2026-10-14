@@ -133,7 +133,9 @@ function EntryIcon({ entry }: { entry: FileEntry }): React.JSX.Element {
 }
 
 export function FilesTab({ instanceId }: { instanceId: string }): React.JSX.Element {
-  const [cwd, setCwd] = React.useState("/");
+  // Start in the container administrator's home directory, not the filesystem root.
+  const [cwd, setCwd] = React.useState("/root");
+  const loadedOnce = React.useRef(false);
   const [listing, setListing] = React.useState<Listing | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | undefined>();
@@ -173,7 +175,13 @@ export function FilesTab({ instanceId }: { instanceId: string }): React.JSX.Elem
       setListing(data);
       setSelected(new Set());
       setError(undefined);
+      loadedOnce.current = true;
     } catch (err) {
+      // Containers without a /root home (unusual minimal images) fall back to /.
+      if (!loadedOnce.current && cwd === "/root" && err instanceof ApiError && err.code === "NOT_FOUND") {
+        setCwd("/");
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Unable to list directory.");
     } finally {
       setLoading(false);

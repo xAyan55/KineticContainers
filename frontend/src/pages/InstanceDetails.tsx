@@ -283,7 +283,7 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
     };
   }, [instanceId, disconnect]);
 
-  const connect = (): void => {
+  const connect = React.useCallback((): void => {
     if (!boxRef.current || sessionRef.current) return;
     setPhase("connecting");
     setDetail("");
@@ -351,7 +351,9 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
           /* ignore */
         }
       }
-      setPhase((p) => (p === "open" ? "closed" : p));
+      // Any ending — clean close, failure mid-handshake, or error — lands on
+      // "closed" so the user gets a Reconnect button instead of a stuck spinner.
+      setPhase("closed");
     };
     ws.onclose = onEnd;
     ws.onerror = () => {
@@ -368,7 +370,12 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
       }
     });
     })();
-  };
+  }, [instanceId]);
+
+  // Connect automatically once the preflight passes — no click required.
+  React.useEffect(() => {
+    if (phase === "ready") connect();
+  }, [phase, connect]);
 
   return (
     <Card>
@@ -381,12 +388,12 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
         <EmptyState title="Console unavailable" hint={reason} />
       ) : null}
       {phase === "error" ? <InlineAlert message={detail} /> : null}
-      {phase === "ready" || phase === "connecting" || phase === "open" || phase === "closed" ? (
+      {phase === "connecting" || phase === "open" || phase === "closed" ? (
         <div className="flex flex-col gap-3">
-          {(phase === "ready" || phase === "closed") && (
+          {phase === "closed" && (
             <div>
               <Button type="button" onClick={connect}>
-                {phase === "closed" ? "Reconnect" : "Connect"}
+                Reconnect
               </Button>
             </div>
           )}

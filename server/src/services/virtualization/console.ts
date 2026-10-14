@@ -13,8 +13,9 @@ import { ProviderError } from "./provider.js";
  * Security model: every connection re-authenticates the session cookie,
  * re-checks instance ownership in the database, validates the container
  * identifier, and requires the container to be running. The spawned process
- * is fixed to `lxc-attach -n <validated-id> -- <shell>` (argument array,
- * never a shell string), so clients can never reach the host shell or
+ * is fixed to `lxc-attach -n <validated-id> -- <shell> -c "cd /root…; exec <shell>"`
+ * (argument array with a constant command string, never user input), so
+ * clients can never reach the host shell or
  * arbitrary processes. The pty is killed on disconnect, idle timeout, or
  * session end.
  */
@@ -232,7 +233,11 @@ function openConsole(ws: WebSocket, req: IncomingMessage, instanceId: string): v
     }
     let proc: PtyProcess;
     try {
-      proc = pty.spawn("lxc-attach", ["-n", containerId, "--", check.shell], {
+      // Start every session in /root (falling back to / when it is missing).
+      // The command string is constant — no client input can reach it.
+      const shell = check.shell;
+      const startCommand = `cd /root 2>/dev/null; exec ${shell}`;
+      proc = pty.spawn("lxc-attach", ["-n", containerId, "--", shell, "-c", startCommand], {
         name: "xterm-256color",
         cols: 80,
         rows: 24,
