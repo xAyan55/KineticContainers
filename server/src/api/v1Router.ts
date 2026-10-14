@@ -10,6 +10,7 @@ import { recordCompletedOperation } from "../services/operations.js";
 import { authRouter } from "../routes/auth.js";
 import { meRouter } from "../routes/me.js";
 import { instancesRouter, templatesRouter } from "../routes/instances.js";
+import { instanceFilesRouter } from "../routes/instanceFiles.js";
 import { nodesRouter } from "../routes/nodes.js";
 import { settingsRouter } from "../routes/settings.js";
 import { adminUsersRouter } from "../routes/admin/users.js";
@@ -198,6 +199,7 @@ export function createV1Router(): Router {
   // Instances: paginated list + provisioning first, then the shared handlers.
   v1.use("/instances", v1InstancesRouter);
   v1.use("/instances", instancesRouter);
+  v1.use("/instances", instanceFilesRouter);
   v1.use("/templates", templatesRouter);
 
   // Infrastructure, accounts, settings, audit, operations, API keys.

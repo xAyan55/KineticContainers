@@ -25,6 +25,7 @@ import {
   StatusBadge,
 } from "@/components/ui/primitives";
 import type { Terminal } from "@xterm/xterm";
+import { FilesTab } from "@/pages/InstanceFiles";
 
 const LiveConsumptionCharts = React.lazy(() =>
   import("@/components/ui/live-consumption-chart").then((m) => ({ default: m.LiveConsumptionCharts }))
@@ -890,13 +891,14 @@ export function SettingsTab({
   );
 }
 
-export type TabId = "overview" | "console" | "resources" | "network" | "settings";
+export type TabId = "overview" | "console" | "resources" | "network" | "files" | "settings";
 
 export const TABS: { id: TabId; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "console", label: "Console" },
   { id: "resources", label: "Resources" },
   { id: "network", label: "Network" },
+  { id: "files", label: "Files" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -971,6 +973,7 @@ export function InstanceDetailsPage(): React.JSX.Element {
             {tab === "console" && <ConsoleTab instanceId={detail.instance.id} />}
             {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
             {tab === "network" && <NetworkTab detail={detail} />}
+            {tab === "files" && <FilesTab instanceId={detail.instance.id} />}
             {tab === "settings" && <SettingsTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
             </TabErrorBoundary>
           </div>

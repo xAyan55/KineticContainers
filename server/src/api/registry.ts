@@ -69,6 +69,14 @@ export const ROUTE_REGISTRY: RouteSpec[] = [
     scopeResolver: (req) => ((req.body as { action?: string } | undefined)?.action === "remove" ? "instances:delete" : "instances:power"),
   },
   { method: "GET", path: "/templates", scope: "instances:read", tag: "Instances", operationId: "listTemplates", summary: "Operating-system templates supported by this host." },
+  { method: "GET", path: "/instances/:id/files", scope: "instances:files:read", tag: "Files", operationId: "listInstanceFiles", summary: "Browse a container directory with metadata, search, sorting, and pagination." },
+  { method: "GET", path: "/instances/:id/files/content", scope: "instances:files:read", tag: "Files", operationId: "readInstanceFile", summary: "Read a UTF-8 text file for editing. Binary and oversized files are refused." },
+  { method: "PUT", path: "/instances/:id/files/content", scope: "instances:files:write", tag: "Files", operationId: "writeInstanceFile", summary: "Save editor content atomically with optimistic concurrency.", sensitive: true },
+  { method: "POST", path: "/instances/:id/files", scope: "instances:files:write", tag: "Files", operationId: "createInstanceFile", summary: "Create an empty file or directory.", sensitive: true },
+  { method: "POST", path: "/instances/:id/files/upload", scope: "instances:files:write", tag: "Files", operationId: "uploadInstanceFiles", summary: "Upload a batch of base64 files into a directory.", sensitive: true },
+  { method: "GET", path: "/instances/:id/files/download", scope: "instances:files:read", tag: "Files", operationId: "downloadInstanceFile", summary: "Stream a regular file back as a download attachment." },
+  { method: "PATCH", path: "/instances/:id/files/move", scope: "instances:files:write", tag: "Files", operationId: "moveInstanceFile", summary: "Rename or move a file or directory.", sensitive: true },
+  { method: "DELETE", path: "/instances/:id/files", scope: "instances:files:write", tag: "Files", operationId: "deleteInstanceFiles", summary: "Delete files and directories, confined to the container.", sensitive: true },
 
   // --- Nodes --------------------------------------------------------------
   { method: "GET", path: "/nodes", scope: "nodes:read", tag: "Nodes", operationId: "listNodes", summary: "Registered nodes and the active provider kind.", admin: true },

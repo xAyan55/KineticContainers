@@ -108,6 +108,19 @@ export const SCOPE_DEFINITIONS: ScopeDefinition[] = [
     sensitive: true,
   },
   {
+    id: "instances:files:read",
+    label: "Browse VPS files",
+    group: "Instances",
+    description: "List container directories, read text files, and download files.",
+  },
+  {
+    id: "instances:files:write",
+    label: "Manage VPS files",
+    group: "Instances",
+    description: "Create, edit, upload, rename, move, and delete files inside containers.",
+    sensitive: true,
+  },
+  {
     id: "nodes:read",
     label: "Read nodes",
     group: "Nodes",

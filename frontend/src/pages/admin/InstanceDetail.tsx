@@ -25,6 +25,7 @@ import {
   type LiveState,
   type TabId,
 } from "@/pages/InstanceDetails";
+import { FilesTab } from "@/pages/InstanceFiles";
 
 interface AdminInstanceDetail {
   instance: Instance & { owner_id: string };
@@ -285,6 +286,7 @@ export function AdminInstanceDetailPage(): React.JSX.Element {
               {tab === "console" && <ConsoleTab instanceId={detail.instance.id} />}
               {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin />}
               {tab === "network" && <NetworkTab detail={detail} />}
+              {tab === "files" && <FilesTab instanceId={detail.instance.id} />}
               {tab === "settings" && (
                 <SettingsTab
                   detail={detail}

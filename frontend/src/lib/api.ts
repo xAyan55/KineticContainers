@@ -26,12 +26,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (body.data ?? {}) as T;
 }
 
+export const apiBase = BASE;
+
 export const api = {
   get: <T>(path: string): Promise<T> => request<T>(path),
   post: <T>(path: string, body?: unknown): Promise<T> =>
     request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
+  put: <T>(path: string, body: unknown): Promise<T> => request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   patch: <T>(path: string, body: unknown): Promise<T> => request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
-  del: <T>(path: string): Promise<T> => request<T>(path, { method: "DELETE" }),
+  del: <T>(path: string, body?: unknown): Promise<T> =>
+    request<T>(path, { method: "DELETE", body: body === undefined ? undefined : JSON.stringify(body) }),
 };
 
 export interface SessionUser {

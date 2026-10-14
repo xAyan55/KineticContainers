@@ -108,6 +108,8 @@ what a key needs.
 | `instances:resources:write` | Instances | ✓ | Change limits and run resource repairs. |
 | `instances:network:read` | Instances | | Read container network config and addresses. |
 | `instances:settings:write` | Instances | ✓ | Rename / edit instance metadata. |
+| `instances:files:read` | Instances | | Browse container directories, read text files, download files. |
+| `instances:files:write` | Instances | ✓ | Create, edit, upload, rename, move, and delete container files. |
 | `nodes:read` | Nodes | | List and inspect nodes. |
 | `nodes:create` | Nodes | ✓ | Register nodes. |
 | `nodes:update` | Nodes | ✓ | Edit node metadata. |
@@ -195,6 +197,26 @@ scope; *(public)* means no key is needed.
 | GET | `/instances/:id/console` | `instances:read` | Console **preflight** only — see §9. |
 | POST | `/instances/:id/actions` | `instances:power` | `{ action: start\|stop\|restart\|remove }`. |
 | GET | `/templates` | `instances:read` | Supported templates. |
+
+### 6.3b Container files
+
+Browse and manage files inside a container's filesystem. Every path is
+container-absolute (`/etc/hostname`), resolved inside the container rootfs;
+traversal (`..`, encoded variants) and symlink escapes are rejected, writes are
+atomic, and mutating calls are audited as `instance.files`. Works whether the
+container is running or stopped, as long as its filesystem is present on the
+local host (remote nodes answer `409 REMOTE_NODE_UNSUPPORTED`).
+
+| Method | Path | Scope | Notes |
+| --- | --- | --- | --- |
+| GET | `/instances/:id/files` | `instances:files:read` | List a directory: `path`, `limit` (≤ 500), `offset`, `sort` (name/size/type/mtime), `order`, `q`. |
+| GET | `/instances/:id/files/content` | `instances:files:read` | Read a UTF-8 text file (≤ 1 MB) with `mtime` for concurrency. Binary/oversized → `415`/`413`. |
+| PUT | `/instances/:id/files/content` | `instances:files:write` | `{ path, content, expected_mtime? }` — `409 FILE_CHANGED` on concurrent edit. Sensitive rate limit. |
+| POST | `/instances/:id/files` | `instances:files:write` | `{ path, type: file\|dir }` → `201`. Existing paths → `409`. |
+| POST | `/instances/:id/files/upload` | `instances:files:write` | `{ path, files: [{ name, content (base64), overwrite? }], overwrite? }` — ≤ 50 files, 8 MB each, 10 MB per batch. Existing files → `409` with colliding names unless overwriting. |
+| GET | `/instances/:id/files/download` | `instances:files:read` | Streams the file as an `application/octet-stream` attachment. |
+| PATCH | `/instances/:id/files/move` | `instances:files:write` | `{ from, to }` — destination must not exist. |
+| DELETE | `/instances/:id/files` | `instances:files:write` | `{ paths: [...] }` — recursive, confined; every path validated before anything is removed. |
 
 **Create an instance**
 
@@ -314,6 +336,15 @@ never left polling forever.
 | `SELF_LOCKOUT` | 409 | Refused to disable/demote/delete your own admin account. |
 | `HAS_INSTANCES` / `NODE_IN_USE` / `NODE_PROTECTED` | 409/403 | Resource constraint. |
 | `REMOTE_NODE_UNSUPPORTED` / `NODE_UNREACHABLE` | 409/502 | Node cannot serve the request. |
+| `INVALID_PATH` / `SYMLINK_REJECTED` | 400 | Path escapes the container root or follows a symlink. |
+| `NOT_A_DIRECTORY` / `IS_A_DIRECTORY` | 400 | Wrong entry kind for the operation. |
+| `FILESYSTEM_NOT_FOUND` | 404 | Container filesystem absent from this host. |
+| `ALREADY_EXISTS` | 409 | Destination taken (upload/move/create); confirm overwrite where offered. |
+| `FILE_CHANGED` | 409 | Editor `expected_mtime` is stale; `details.actual_mtime` has the current value. |
+| `FILE_TOO_LARGE` | 413 | Over the read (1 MB), write (2 MB), or upload (8 MB/file, 10 MB/batch) caps. |
+| `UNSUPPORTED_FILE` | 415 | Binary, special, or non-UTF-8 file in the editor/download path. |
+| `PERMISSION_DENIED` | 403 | Host refused the filesystem operation. |
+| `DISK_FULL` | 507 | No space left on the container filesystem. |
 | provider codes | 4xx/5xx | `instance.create` etc. surfaced from the virtualization provider. |
 
 ## 9. Known limitations

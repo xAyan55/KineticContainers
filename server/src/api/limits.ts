@@ -94,6 +94,7 @@ const SENSITIVE_PREFIXES = [
   "POST /instances",
   "DELETE /instances",
   "PATCH /instances", // rename + resource changes
+  "PUT /instances", // file content writes
   "POST /nodes",
   "DELETE /nodes",
   "PATCH /nodes",

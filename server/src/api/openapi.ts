@@ -60,6 +60,8 @@ interface DocEntry {
   successDescription?: string;
   /** Extra non-error responses (e.g. 202 for async work). */
   extraResponses?: { status: number; description: string; schema: SchemaObject }[];
+  /** Non-JSON success payload (file downloads). */
+  successContentType?: string;
   /** Additional error statuses beyond the standard set. */
   errors?: (number | { status: number; description: string })[];
   /** Skip the standard auth error set (public endpoints). */
@@ -205,6 +207,21 @@ const SCHEMAS: Record<string, SchemaObject> = {
       ip_address: { type: "string", nullable: true },
       created_at: { type: "string", format: "date-time" },
       updated_at: { type: "string", format: "date-time" },
+    },
+  },
+  FileEntry: {
+    type: "object",
+    required: ["name", "path", "type", "size", "mode", "mtime"],
+    description: "One file or directory inside a container. Symlinks are reported with their stored target and never followed.",
+    properties: {
+      name: { type: "string", example: "nginx.conf" },
+      path: { type: "string", example: "/etc/nginx/nginx.conf" },
+      type: { type: "string", enum: ["file", "dir", "symlink", "other"] },
+      size: { type: "integer", description: "Bytes for files, 0 otherwise." },
+      children: { type: "integer", nullable: true, description: "Entry count for directories." },
+      mode: { type: "string", example: "-rw-r--r--" },
+      mtime: { type: "string", format: "date-time" },
+      target: { type: "string", nullable: true, description: "Symlink target exactly as stored." },
     },
   },
   LiveState: {
@@ -715,6 +732,164 @@ const DOCS: Record<string, DocEntry> = {
     description: "Operating-system templates the local provider can provision.",
     successSchema: envelope({ type: "object", properties: { templates: { type: "array", items: { type: "string" } } } }),
   },
+  listInstanceFiles: {
+    description: "Browse a container directory. Every path is resolved inside the container rootfs; traversal and symlink escapes are rejected. Reads work whether the container is running or stopped, as long as its filesystem is present on the host.",
+    query: [
+      { name: "path", description: "Container-absolute directory path.", schema: { type: "string", default: "/" }, example: "/etc/nginx" },
+      { name: "limit", description: "Entries per page (1–500).", schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } },
+      { name: "offset", description: "Entries to skip.", schema: { type: "integer", minimum: 0, default: 0 } },
+      { name: "sort", description: "Sort key.", schema: { type: "string", enum: ["name", "size", "type", "mtime"], default: "name" } },
+      { name: "order", description: "Sort direction.", schema: { type: "string", enum: ["asc", "desc"], default: "asc" } },
+      { name: "q", description: "Case-insensitive filename substring filter.", schema: { type: "string" } },
+    ],
+    successSchema: envelope({
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        entries: { type: "array", items: ref("FileEntry") },
+        pagination: { type: "object", properties: { limit: { type: "integer" }, offset: { type: "integer" }, total: { type: "integer" } } },
+      },
+    }),
+    errors: [400, 404, 409],
+  },
+  readInstanceFile: {
+    description: "Read a UTF-8 text file (up to 1 MB) for the editor, with its modification time for optimistic concurrency. Binary, special, and oversized files are refused with an explicit code.",
+    query: [
+      { name: "path", description: "Container-absolute file path.", schema: { type: "string" }, example: "/etc/nginx/nginx.conf" },
+    ],
+    successSchema: envelope({
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        content: { type: "string" },
+        size: { type: "integer" },
+        mtime: { type: "string", format: "date-time" },
+      },
+    }),
+    errors: [400, 404, 409, 413, 415],
+  },
+  writeInstanceFile: {
+    description: "Save editor content with an atomic replace. Pass the `mtime` from the read as `expected_mtime` to detect concurrent edits (409 FILE_CHANGED).",
+    requestBody: {
+      required: true,
+      schema: {
+        type: "object",
+        required: ["path", "content"],
+        properties: {
+          path: { type: "string" },
+          content: { type: "string", description: "Up to 2 MB of UTF-8 text." },
+          expected_mtime: { type: "string", description: "mtime from the last read; 409 when the file changed since." },
+        },
+      },
+      example: { path: "/etc/nginx/nginx.conf", content: "user www-data;\n", expected_mtime: "2026-10-14T09:00:00.000Z" },
+    },
+    successSchema: envelope({
+      type: "object",
+      properties: { path: { type: "string" }, size: { type: "integer" }, mtime: { type: "string", format: "date-time" } },
+    }),
+    errors: [400, 403, 404, 409, 413, 415],
+  },
+  createInstanceFile: {
+    description: "Create an empty file or a directory. Existing paths conflict (409) instead of being silently reused.",
+    requestBody: {
+      required: true,
+      schema: {
+        type: "object",
+        required: ["path", "type"],
+        properties: { path: { type: "string" }, type: { type: "string", enum: ["file", "dir"] } },
+      },
+      example: { path: "/root/notes/todo.txt", type: "file" },
+    },
+    successStatus: 201,
+    successSchema: envelope({ type: "object", properties: { entry: ref("FileEntry") } }),
+    errors: [400, 403, 404, 409],
+  },
+  uploadInstanceFiles: {
+    description: "Upload up to 50 base64 files (8 MB each, 10 MB per batch) into a directory. Existing files conflict (409 with the colliding names) unless `overwrite` is set.",
+    requestBody: {
+      required: true,
+      schema: {
+        type: "object",
+        required: ["path", "files"],
+        properties: {
+          path: { type: "string", description: "Destination directory." },
+          files: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["name", "content"],
+              properties: {
+                name: { type: "string", description: "Plain filename, no slashes." },
+                content: { type: "string", description: "Base64 file bytes." },
+                overwrite: { type: "boolean" },
+              },
+            },
+          },
+          overwrite: { type: "boolean", description: "Replace colliding files." },
+        },
+      },
+      example: { path: "/root/uploads", files: [{ name: "app.conf", content: "dXNlciB3d3ctZGF0YTsK" }] },
+    },
+    successStatus: 201,
+    successSchema: envelope({
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        files: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              path: { type: "string" },
+              size: { type: "integer" },
+              mtime: { type: "string", format: "date-time" },
+              overwritten: { type: "boolean" },
+            },
+          },
+        },
+      },
+    }),
+    errors: [400, 403, 404, 409, 413],
+  },
+  downloadInstanceFile: {
+    description: "Stream a regular file back as an `application/octet-stream` attachment. Symlinks and directories are refused.",
+    query: [
+      { name: "path", description: "Container-absolute file path.", schema: { type: "string" }, example: "/var/log/app.log" },
+    ],
+    successContentType: "application/octet-stream",
+    successDescription: "The file bytes as a download attachment.",
+    successSchema: { type: "string", format: "binary" },
+    errors: [400, 404, 409, 415],
+  },
+  moveInstanceFile: {
+    description: "Rename or move a file or directory. The destination must not exist; moving a directory inside itself is rejected.",
+    requestBody: {
+      required: true,
+      schema: {
+        type: "object",
+        required: ["from", "to"],
+        properties: { from: { type: "string" }, to: { type: "string" } },
+      },
+      example: { from: "/root/old.conf", to: "/root/conf/new.conf" },
+    },
+    successSchema: envelope({ type: "object", properties: { from: { type: "string" }, to: { type: "string" } } }),
+    errors: [400, 403, 404, 409],
+  },
+  deleteInstanceFiles: {
+    description: "Delete up to 100 files and directories. Directories are removed recursively without following symlinks; every path is validated before anything is removed, and the container root itself can never be deleted.",
+    requestBody: {
+      required: true,
+      schema: {
+        type: "object",
+        required: ["paths"],
+        properties: { paths: { type: "array", items: { type: "string" } } },
+      },
+      example: { paths: ["/root/old.conf", "/root/tmp"] },
+    },
+    successSchema: envelope({ type: "object", properties: { deleted: { type: "array", items: { type: "string" } } } }),
+    errors: [400, 403, 404, 409],
+  },
   listNodes: {
     description: "Registered nodes plus the active provider kind. Stored tokens are never included.",
     successSchema: envelope(ref("NodeList")),
@@ -1073,7 +1248,8 @@ function defaultMessage(status: number): string {
 function successResponse(spec: RouteSpec, doc: DocEntry): [string, SchemaObject] {
   const status = String(doc.successStatus ?? 200);
   const description = doc.successDescription ?? successDescription(spec);
-  return [status, { description, content: { "application/json": { schema: doc.successSchema } } }];
+  const contentType = doc.successContentType ?? "application/json";
+  return [status, { description, content: { [contentType]: { schema: doc.successSchema } } }];
 }
 
 function successDescription(spec: RouteSpec): string {

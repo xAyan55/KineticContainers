@@ -30,7 +30,7 @@ import { ProviderError } from "../services/virtualization/provider.js";
 export const instancesRouter = Router();
 instancesRouter.use(requireAuth);
 
-type InstanceRow = Record<string, unknown>;
+export type InstanceRow = Record<string, unknown>;
 
 export function toPublic(row: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -63,7 +63,7 @@ function getOwnedInstance(db: ReturnType<typeof getDb>, instanceId: string, user
  * Use-and-manage lookup: administrators see every instance, ordinary users
  * see only their own. Unknown ids and (for users) foreign instances are 404.
  */
-function getManagedInstance(
+export function getManagedInstance(
   db: ReturnType<typeof getDb>,
   instanceId: string,
   user: { id: string; role: string }

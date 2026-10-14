@@ -27,6 +27,9 @@
       "name": "Instances"
     },
     {
+      "name": "Files"
+    },
+    {
       "name": "Nodes"
     },
     {
@@ -4092,6 +4095,1938 @@
         },
         "x-scope": "instances:read",
         "x-scope-description": "List and inspect VPS records, live status, metrics, templates, and console availability."
+      }
+    },
+    "/api/v1/instances/:id/files": {
+      "get": {
+        "operationId": "listInstanceFiles",
+        "summary": "Browse a container directory with metadata, search, sorting, and pagination.",
+        "description": "Browse a container directory. Every path is resolved inside the container rootfs; traversal and symlink escapes are rejected. Reads work whether the container is running or stopped, as long as its filesystem is present on the host.",
+        "tags": [
+          "Files"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "entries": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/FileEntry"
+                          }
+                        },
+                        "pagination": {
+                          "type": "object",
+                          "properties": {
+                            "limit": {
+                              "type": "integer"
+                            },
+                            "offset": {
+                              "type": "integer"
+                            },
+                            "total": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:files:read",
+        "x-scope-description": "List container directories, read text files, and download files.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "description": "Container-absolute directory path.",
+            "schema": {
+              "type": "string",
+              "default": "/"
+            },
+            "example": "/etc/nginx"
+          },
+          {
+            "name": "limit",
+            "description": "Entries per page (1–500).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "description": "Entries to skip.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "sort",
+            "description": "Sort key.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "size",
+                "type",
+                "mtime"
+              ],
+              "default": "name"
+            }
+          },
+          {
+            "name": "order",
+            "description": "Sort direction.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "asc"
+            }
+          },
+          {
+            "name": "q",
+            "description": "Case-insensitive filename substring filter.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createInstanceFile",
+        "summary": "Create an empty file or directory.",
+        "description": "Create an empty file or a directory. Existing paths conflict (409) instead of being silently reused.",
+        "tags": [
+          "Files"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "entry": {
+                          "$ref": "#/components/schemas/FileEntry"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:files:write",
+        "x-scope-description": "Create, edit, upload, rename, move, and delete files inside containers.",
+        "x-sensitive": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "type"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "file",
+                      "dir"
+                    ]
+                  }
+                }
+              },
+              "example": {
+                "path": "/root/notes/todo.txt",
+                "type": "file"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteInstanceFiles",
+        "summary": "Delete files and directories, confined to the container.",
+        "description": "Delete up to 100 files and directories. Directories are removed recursively without following symlinks; every path is validated before anything is removed, and the container root itself can never be deleted.",
+        "tags": [
+          "Files"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "deleted": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:files:write",
+        "x-scope-description": "Create, edit, upload, rename, move, and delete files inside containers.",
+        "x-sensitive": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "paths"
+                ],
+                "properties": {
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "example": {
+                "paths": [
+                  "/root/old.conf",
+                  "/root/tmp"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/:id/files/content": {
+      "get": {
+        "operationId": "readInstanceFile",
+        "summary": "Read a UTF-8 text file for editing. Binary and oversized files are refused.",
+        "description": "Read a UTF-8 text file (up to 1 MB) for the editor, with its modification time for optimistic concurrency. Binary, special, and oversized files are refused with an explicit code.",
+        "tags": [
+          "Files"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        },
+                        "size": {
+                          "type": "integer"
+                        },
+                        "mtime": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Request failed.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Request failed.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:files:read",
+        "x-scope-description": "List container directories, read text files, and download files.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "description": "Container-absolute file path.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "/etc/nginx/nginx.conf"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "writeInstanceFile",
+        "summary": "Save editor content atomically with optimistic concurrency.",
+        "description": "Save editor content with an atomic replace. Pass the `mtime` from the read as `expected_mtime` to detect concurrent edits (409 FILE_CHANGED).",
+        "tags": [
+          "Files"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "size": {
+                          "type": "integer"
+                        },
+                        "mtime": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Request failed.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Request failed.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:files:write",
+        "x-scope-description": "Create, edit, upload, rename, move, and delete files inside containers.",
+        "x-sensitive": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "content"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Up to 2 MB of UTF-8 text."
+                  },
+                  "expected_mtime": {
+                    "type": "string",
+                    "description": "mtime from the last read; 409 when the file changed since."
+                  }
+                }
+              },
+              "example": {
+                "path": "/etc/nginx/nginx.conf",
+                "content": "user www-data;\n",
+                "expected_mtime": "2026-10-14T09:00:00.000Z"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/:id/files/upload": {
+      "post": {
+        "operationId": "uploadInstanceFiles",
+        "summary": "Upload a batch of base64 files into a directory.",
+        "description": "Upload up to 50 base64 files (8 MB each, 10 MB per batch) into a directory. Existing files conflict (409 with the colliding names) unless `overwrite` is set.",
+        "tags": [
+          "Files"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "path": {
+                                "type": "string"
+                              },
+                              "size": {
+                                "type": "integer"
+                              },
+                              "mtime": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "overwritten": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Request failed.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:files:write",
+        "x-scope-description": "Create, edit, upload, rename, move, and delete files inside containers.",
+        "x-sensitive": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "files"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Destination directory."
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "content"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "description": "Plain filename, no slashes."
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "Base64 file bytes."
+                        },
+                        "overwrite": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  },
+                  "overwrite": {
+                    "type": "boolean",
+                    "description": "Replace colliding files."
+                  }
+                }
+              },
+              "example": {
+                "path": "/root/uploads",
+                "files": [
+                  {
+                    "name": "app.conf",
+                    "content": "dXNlciB3d3ctZGF0YTsK"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/:id/files/download": {
+      "get": {
+        "operationId": "downloadInstanceFile",
+        "summary": "Stream a regular file back as a download attachment.",
+        "description": "Stream a regular file back as an `application/octet-stream` attachment. Symlinks and directories are refused.",
+        "tags": [
+          "Files"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file bytes as a download attachment.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Request failed.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:files:read",
+        "x-scope-description": "List container directories, read text files, and download files.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "description": "Container-absolute file path.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "/var/log/app.log"
+          }
+        ]
+      }
+    },
+    "/api/v1/instances/:id/files/move": {
+      "patch": {
+        "operationId": "moveInstanceFile",
+        "summary": "Rename or move a file or directory.",
+        "description": "Rename or move a file or directory. The destination must not exist; moving a directory inside itself is rejected.",
+        "tags": [
+          "Files"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:files:write",
+        "x-scope-description": "Create, edit, upload, rename, move, and delete files inside containers.",
+        "x-sensitive": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "from",
+                  "to"
+                ],
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  }
+                }
+              },
+              "example": {
+                "from": "/root/old.conf",
+                "to": "/root/conf/new.conf"
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/nodes": {
@@ -9636,6 +11571,59 @@
           }
         }
       },
+      "FileEntry": {
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "type",
+          "size",
+          "mode",
+          "mtime"
+        ],
+        "description": "One file or directory inside a container. Symlinks are reported with their stored target and never followed.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "nginx.conf"
+          },
+          "path": {
+            "type": "string",
+            "example": "/etc/nginx/nginx.conf"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "file",
+              "dir",
+              "symlink",
+              "other"
+            ]
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes for files, 0 otherwise."
+          },
+          "children": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Entry count for directories."
+          },
+          "mode": {
+            "type": "string",
+            "example": "-rw-r--r--"
+          },
+          "mtime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "target": {
+            "type": "string",
+            "nullable": true,
+            "description": "Symlink target exactly as stored."
+          }
+        }
+      },
       "LiveState": {
         "type": "object",
         "description": "Reconciled host state. `exists: null` means the host could not be checked — never guessed.",
@@ -10457,6 +12445,19 @@
       "label": "Manage VPS metadata",
       "group": "Instances",
       "description": "Rename instances and update instance metadata.",
+      "sensitive": true
+    },
+    {
+      "id": "instances:files:read",
+      "label": "Browse VPS files",
+      "group": "Instances",
+      "description": "List container directories, read text files, and download files."
+    },
+    {
+      "id": "instances:files:write",
+      "label": "Manage VPS files",
+      "group": "Instances",
+      "description": "Create, edit, upload, rename, move, and delete files inside containers.",
       "sensitive": true
     },
     {

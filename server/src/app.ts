@@ -11,6 +11,7 @@ import { csrfCheck } from "./middleware/auth.js";
 import { authRouter } from "./routes/auth.js";
 import { meRouter } from "./routes/me.js";
 import { instancesRouter, templatesRouter } from "./routes/instances.js";
+import { instanceFilesRouter } from "./routes/instanceFiles.js";
 import { adminUsersRouter } from "./routes/admin/users.js";
 import { adminOverviewRouter } from "./routes/admin/overview.js";
 import { adminCreateRouter } from "./routes/admin/create.js";
@@ -32,6 +33,11 @@ export function createApp(): express.Express {
   // so the smaller global parser below skips these requests.
   app.use("/api/settings/branding", express.json({ limit: "2mb" }));
   app.use("/api/v1/settings/branding", express.json({ limit: "2mb" }));
+  // File uploads carry base64 batches and legitimately exceed the default
+  // body cap. These path-scoped parsers run first and mark the body parsed,
+  // so the smaller global parser below skips these requests.
+  app.use("/api/instances/:instanceId/files", express.json({ limit: "12mb" }));
+  app.use("/api/v1/instances/:instanceId/files", express.json({ limit: "12mb" }));
   app.use(express.json({ limit: "256kb" }));
   app.use(cookieParser());
 
@@ -64,6 +70,7 @@ export function createApp(): express.Express {
   app.use("/api/auth", csrfCheck, authRouter);
   app.use("/api/me", csrfCheck, meRouter);
   app.use("/api/instances", csrfCheck, instancesRouter);
+  app.use("/api/instances", csrfCheck, instanceFilesRouter);
   app.use("/api/templates", csrfCheck, templatesRouter);
   app.use("/api/admin/overview", csrfCheck, adminOverviewRouter);
   app.use("/api/admin/users", csrfCheck, adminUsersRouter);
