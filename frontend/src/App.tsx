@@ -13,6 +13,8 @@ import { AdminUsersPage } from "@/pages/admin/Users";
 import { AdminUserDetailPage } from "@/pages/admin/UserDetail";
 import { AdminCreatePage } from "@/pages/admin/Create";
 import { AdminApiKeysPage } from "@/pages/admin/ApiKeys";
+import { AdminInstancesPage } from "@/pages/admin/Instances";
+import { AdminInstanceDetailPage } from "@/pages/admin/InstanceDetail";
 import { AdminSettingsPage } from "@/pages/admin/Settings";
 import { NotFoundPage } from "@/pages/NotFound";
 import { api } from "@/lib/api";
@@ -117,6 +119,26 @@ export function App(): React.JSX.Element {
               <RequireAdmin>
                 <AppShell appName={appName}>
                   <AdminCreatePage />
+                </AppShell>
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/instances"
+            element={
+              <RequireAdmin>
+                <AppShell appName={appName}>
+                  <AdminInstancesPage />
+                </AppShell>
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/instances/:id/:tabId?"
+            element={
+              <RequireAdmin>
+                <AppShell appName={appName}>
+                  <AdminInstanceDetailPage />
                 </AppShell>
               </RequireAdmin>
             }

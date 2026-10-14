@@ -14,6 +14,7 @@ import { instancesRouter, templatesRouter } from "./routes/instances.js";
 import { adminUsersRouter } from "./routes/admin/users.js";
 import { adminOverviewRouter } from "./routes/admin/overview.js";
 import { adminCreateRouter } from "./routes/admin/create.js";
+import { adminInstancesRouter } from "./routes/admin/instances.js";
 import { nodesRouter } from "./routes/nodes.js";
 import { settingsRouter } from "./routes/settings.js";
 import { auditRouter } from "./routes/audit.js";
@@ -67,6 +68,7 @@ export function createApp(): express.Express {
   app.use("/api/admin/overview", csrfCheck, adminOverviewRouter);
   app.use("/api/admin/users", csrfCheck, adminUsersRouter);
   app.use("/api/admin/instances", csrfCheck, adminCreateRouter);
+  app.use("/api/admin/instances", csrfCheck, adminInstancesRouter);
   app.use("/api/admin/api-keys", csrfCheck, buildAdminApiKeysRouter());
   app.use("/api/admin/audit", csrfCheck, auditRouter);
   app.use("/api/nodes", csrfCheck, nodesRouter);

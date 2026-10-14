@@ -30,7 +30,7 @@ const LiveConsumptionCharts = React.lazy(() =>
   import("@/components/ui/live-consumption-chart").then((m) => ({ default: m.LiveConsumptionCharts }))
 );
 
-function formatDateTime(iso: string): string {
+export function formatDateTime(iso: string): string {
   try {
     return new Date(iso).toLocaleString(undefined, {
       year: "numeric",
@@ -44,14 +44,14 @@ function formatDateTime(iso: string): string {
   }
 }
 
-interface LiveState {
+export interface LiveState {
   exists: boolean | null;
   status: string | null;
   checkedAt: string;
   error: string | null;
 }
 
-interface InstanceDetail {
+export interface InstanceDetail {
   instance: Instance;
   live: LiveState;
 }
@@ -158,7 +158,7 @@ function PowerControls({
   );
 }
 
-function Fact({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
+export function Fact({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
     <div className="rounded-md border border-border px-3 py-2">
       <p className="text-xs text-muted">{label}</p>
@@ -167,7 +167,7 @@ function Fact({ label, value, mono }: { label: string; value: React.ReactNode; m
   );
 }
 
-class TabErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+export class TabErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
     this.state = { failed: false };
@@ -190,7 +190,7 @@ class TabErrorBoundary extends React.Component<{ children: React.ReactNode }, { 
   }
 }
 
-function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh: () => void }) {
+export function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh: () => void }) {
   const running = detail.live.exists === true && detail.live.status === "running";
   const i = detail.instance;
   return (
@@ -236,7 +236,7 @@ function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onRefresh:
 
 type ConsolePhase = "checking" | "ready" | "unsupported" | "connecting" | "open" | "closed" | "error";
 
-function ConsoleTab({ instanceId }: { instanceId: string }) {
+export function ConsoleTab({ instanceId }: { instanceId: string }) {
   const [phase, setPhase] = React.useState<ConsolePhase>("checking");
   const [reason, setReason] = React.useState<string>("");
   const [detail, setDetail] = React.useState<string>("");
@@ -403,7 +403,7 @@ function ConsoleTab({ instanceId }: { instanceId: string }) {
   );
 }
 
-function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceDetail; onRefresh: () => void; isAdmin: boolean }) {
+export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceDetail; onRefresh: () => void; isAdmin: boolean }) {
   const i = detail.instance;
   const [config, setConfig] = React.useState<null | {
     configured: { cpu: number; memory_mb: number; storage_gb: number };
@@ -620,7 +620,7 @@ interface RepairReport {
   warnings: string[];
 }
 
-function RepairCard({ instanceId, onRepaired }: { instanceId: string; onRepaired: () => void }): React.JSX.Element {
+export function RepairCard({ instanceId, onRepaired }: { instanceId: string; onRepaired: () => void }): React.JSX.Element {
   const [plan, setPlan] = React.useState<RepairPlan | null>(null);
   const [report, setReport] = React.useState<RepairReport | null>(null);
   const [error, setError] = React.useState<string | undefined>();
@@ -707,7 +707,7 @@ function RepairCard({ instanceId, onRepaired }: { instanceId: string; onRepaired
   );
 }
 
-function NetworkTab({ detail }: { detail: InstanceDetail }) {
+export function NetworkTab({ detail }: { detail: InstanceDetail }) {
   const [network, setNetwork] = React.useState<null | {
     state: string;
     pid: number | null;
@@ -775,7 +775,18 @@ function NetworkTab({ detail }: { detail: InstanceDetail }) {
   );
 }
 
-function SettingsTab({ detail, onRefresh, isAdmin }: { detail: InstanceDetail; onRefresh: () => void; isAdmin: boolean }) {
+export function SettingsTab({
+  detail,
+  onRefresh,
+  isAdmin,
+  onDeleted,
+}: {
+  detail: InstanceDetail;
+  onRefresh: () => void;
+  isAdmin: boolean;
+  /** Where to go after a successful delete. Defaults to the user dashboard. */
+  onDeleted?: () => void;
+}) {
   const navigate = useNavigate();
   const i = detail.instance;
   const [name, setName] = React.useState(i.name);
@@ -806,7 +817,8 @@ function SettingsTab({ detail, onRefresh, isAdmin }: { detail: InstanceDetail; o
     setError(undefined);
     try {
       await api.del(`/api/instances/${i.id}`);
-      navigate("/");
+      if (onDeleted) onDeleted();
+      else navigate("/");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not delete.");
       setConfirming(false);
@@ -878,9 +890,9 @@ function SettingsTab({ detail, onRefresh, isAdmin }: { detail: InstanceDetail; o
   );
 }
 
-type TabId = "overview" | "console" | "resources" | "network" | "settings";
+export type TabId = "overview" | "console" | "resources" | "network" | "settings";
 
-const TABS: { id: TabId; label: string }[] = [
+export const TABS: { id: TabId; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "console", label: "Console" },
   { id: "resources", label: "Resources" },

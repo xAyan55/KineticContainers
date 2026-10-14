@@ -386,3 +386,19 @@ The browser UI continues to use the older, unversioned routes under `/api`
 (cookie-authenticated). They share the same handlers and services as `/api/v1` but are
 not part of the stable public contract. Administrators manage keys from the panel's
 **API Keys** page, which calls `/api/admin/api-keys`.
+
+### Admin instance management
+
+The panel's **Admin → Instances** page is backed by administrator-only endpoints under
+`/api/admin/instances` (session cookie + admin role required on every route):
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/admin/instances` | Every managed instance with joined `owner`, `node`, and live `live` state. Query: `page`, `page_size`, `q` (name/container/id/owner), `status` (incl. `transitional`, `missing`, `unavailable`), `node_id`, `owner_id`, `template`, `sort`, `order`. |
+| GET | `/api/admin/instances/stats` | Recorded-status counts plus integrity markers (`missing_owner`, `missing_node`, `unattached_node`, `node_degraded`). |
+| GET | `/api/admin/instances/:id` | One instance with `owner`, `node`, `live`; reconciles stored status with verified host truth. |
+| POST | `/api/admin/instances/:id/transfer` | `{ target_user_id }` — moves one instance to an existing active user without touching the container; audited as `admin.instance_transfer`. |
+
+Power, resources, rename, repair, and delete reuse the existing `/api/instances/:id`
+endpoints, which already resolve any instance for administrators. Start/stop/restart
+attempts are audited as `instance.power` with success and failure outcomes.

@@ -547,7 +547,7 @@ instancesRouter.post("/:id/actions", async (req, res) => {
   }
   const provider = getProvider();
   const action = parsed.data.action;
-  const want = action === "stop" ? "stopped" : "running";
+  const previousStatus = String(row.status);
   try {
     if (action === "start" && provider.capabilities.start) {
       await provider.startContainer(String(row.node_id), String(row.container_id));
@@ -572,8 +572,27 @@ instancesRouter.post("/:id/actions", async (req, res) => {
       );
       row.status = live.status;
     }
+    recordAudit(db, {
+      actorId: req.user!.id,
+      action: "instance.power",
+      targetType: "instance",
+      targetId: row.id as string,
+      detail: { action, container_id: row.container_id, previous_status: previousStatus, status: row.status },
+    });
     res.json({ data: { instance: toPublic(row), live } });
   } catch (err) {
+    recordAudit(db, {
+      actorId: req.user?.id,
+      action: "instance.power",
+      targetType: "instance",
+      targetId: row.id as string,
+      detail: {
+        action,
+        container_id: row.container_id,
+        outcome: "failed",
+        error: err instanceof ProviderError ? `${err.code}: ${err.message}` : "Infrastructure operation failed.",
+      },
+    });
     providerError(res, err);
   }
 });
