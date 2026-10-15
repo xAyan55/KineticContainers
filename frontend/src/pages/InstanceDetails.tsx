@@ -98,6 +98,7 @@ function PowerControls({
   const isRunning = liveStatus === "running";
   const isStopped = liveStatus === "stopped";
   const unknown = detail.live.exists !== true || (!isRunning && !isStopped);
+  const suspended = detail.instance.status === "suspended";
 
   const act = async (action: "start" | "stop" | "restart"): Promise<void> => {
     setActing(action);
@@ -118,8 +119,8 @@ function PowerControls({
         <Button
           type="button"
           onClick={() => void act("start")}
-          disabled={acting !== null || isRunning}
-          title={isRunning ? "Already running" : "Start"}
+          disabled={acting !== null || isRunning || suspended}
+          title={suspended ? "Suspended — ask an administrator to unsuspend first" : isRunning ? "Already running" : "Start"}
         >
           {acting === "start" ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Power className="h-4 w-4" aria-hidden="true" />}
           {compact ? null : "Start"}
@@ -128,8 +129,8 @@ function PowerControls({
           type="button"
           variant="ghost"
           onClick={() => void act("stop")}
-          disabled={acting !== null || isStopped}
-          title={isStopped ? "Already stopped" : "Stop"}
+          disabled={acting !== null || isStopped || suspended}
+          title={suspended ? "Suspended — ask an administrator to unsuspend first" : isStopped ? "Already stopped" : "Stop"}
         >
           {acting === "stop" ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Square className="h-4 w-4" aria-hidden="true" />}
           {compact ? null : "Stop"}
@@ -138,14 +139,19 @@ function PowerControls({
           type="button"
           variant="ghost"
           onClick={() => void act("restart")}
-          disabled={acting !== null || unknown}
-          title="Restart"
+          disabled={acting !== null || unknown || suspended}
+          title={suspended ? "Suspended — ask an administrator to unsuspend first" : "Restart"}
         >
           {acting === "restart" ? <RefreshCw className="h-4 w-4 animate-spin" aria-hidden="true" /> : <RotateCcw className="h-4 w-4" aria-hidden="true" />}
           {compact ? null : "Restart"}
         </Button>
       </div>
-      {unknown && !compact ? (
+      {suspended && !compact ? (
+        <p className="mt-2 text-xs text-muted">
+          This VPS is suspended by an administrator. Power actions are blocked until it is unsuspended.
+        </p>
+      ) : null}
+      {unknown && !suspended && !compact ? (
         <p className="mt-2 text-xs text-muted">
           {detail.live.exists === false
             ? "Container is missing on the host; power actions will fail until it is recreated."
@@ -803,6 +809,25 @@ export function SettingsTab({
   const [saving, setSaving] = React.useState(false);
   const [confirming, setConfirming] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
+  const [suspending, setSuspending] = React.useState(false);
+  const [confirmSuspend, setConfirmSuspend] = React.useState(false);
+  const suspended = i.status === "suspended";
+
+  const setSuspended = async (lift: boolean): Promise<void> => {
+    setSuspending(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await api.post(`/api/instances/${i.id}/${lift ? "unsuspend" : "suspend"}`, {});
+      setNotice(lift ? "Suspension lifted. The container was not started." : "VPS suspended. Power actions are blocked until unsuspended.");
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not change suspension.");
+    } finally {
+      setSuspending(false);
+      setConfirmSuspend(false);
+    }
+  };
 
   const saveName = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -873,6 +898,37 @@ export function SettingsTab({
           <Fact label="Created" value={formatDateTime(i.created_at)} />
         </div>
       </Card>
+      {isAdmin ? (
+      <Card>
+        <h2 className="mb-1 text-sm font-semibold text-primary">Suspension</h2>
+        <p className="mb-4 text-xs text-muted">
+          {suspended
+            ? "This VPS is suspended: the container is held stopped and power actions are blocked. Unsuspending lifts the hold without starting the container."
+            : "Suspending stops the container when the host can verify it, then blocks start, stop, and restart until an administrator unsuspends. Files and settings remain manageable."}
+        </p>
+        {!confirmSuspend ? (
+          suspended ? (
+            <Button type="button" onClick={() => void setSuspended(true)} disabled={suspending}>
+              {suspending ? "Unsuspending…" : "Unsuspend VPS"}
+            </Button>
+          ) : (
+            <Button type="button" variant="danger" onClick={() => setConfirmSuspend(true)}>
+              Suspend VPS…
+            </Button>
+          )
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-muted">Suspend <span className="font-mono text-primary">{i.container_id}</span> now?</span>
+            <Button type="button" variant="danger" onClick={() => void setSuspended(false)} disabled={suspending}>
+              {suspending ? "Suspending…" : "Confirm suspend"}
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setConfirmSuspend(false)} disabled={suspending}>
+              Cancel
+            </Button>
+          </div>
+        )}
+      </Card>
+      ) : null}
       {isAdmin ? (
       <Card>
         <h2 className="mb-1 text-sm font-semibold text-primary">Delete VPS</h2>

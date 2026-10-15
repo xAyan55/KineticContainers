@@ -104,6 +104,7 @@ what a key needs.
 | `instances:create` | Instances | ✓ | Provision containers. |
 | `instances:power` | Instances | ✓ | Start/stop/restart. |
 | `instances:delete` | Instances | ✓ | Destroy containers. |
+| `instances:suspend` | Instances | ✓ | Suspend and unsuspend VPS instances. |
 | `instances:resources:read` | Instances | | Read CPU/memory/disk limits and usage. |
 | `instances:resources:write` | Instances | ✓ | Change limits and run resource repairs. |
 | `instances:network:read` | Instances | | Read container network config and addresses. |
@@ -195,7 +196,9 @@ scope; *(public)* means no key is needed.
 | GET | `/instances/:id/repair` | `instances:resources:read` | Preview a resource-repair plan. |
 | POST | `/instances/:id/repair` | `instances:resources:write` | Apply the repair. |
 | GET | `/instances/:id/console` | `instances:read` | Console **preflight** only — see §9. |
-| POST | `/instances/:id/actions` | `instances:power` | `{ action: start\|stop\|restart\|remove }`. |
+| POST | `/instances/:id/actions` | `instances:power` | `{ action: start\|stop\|restart\|remove }`. Start/stop/restart are refused with `403 INSTANCE_SUSPENDED` while suspended. |
+| POST | `/instances/:id/suspend` | `instances:suspend` | Admin hold: stop a verified-running container, then block power ops. `409 ALREADY_SUSPENDED`. |
+| POST | `/instances/:id/unsuspend` | `instances:suspend` | Lift the hold without starting; status follows verified host state (`unknown` when unchecked). `409 NOT_SUSPENDED`. |
 | GET | `/templates` | `instances:read` | Supported templates. |
 
 ### 6.3b Container files
@@ -335,6 +338,9 @@ never left polling forever.
 | `REGISTRATION_DISABLED` | 403 | Registration turned off. |
 | `SELF_LOCKOUT` | 409 | Refused to disable/demote/delete your own admin account. |
 | `HAS_INSTANCES` / `NODE_IN_USE` / `NODE_PROTECTED` | 409/403 | Resource constraint. |
+| `INSTANCE_SUSPENDED` | 403 | Power operation on a suspended VPS; unsuspend first. |
+| `ALREADY_SUSPENDED` / `NOT_SUSPENDED` | 409 | Suspend/unsuspend precondition failed. |
+| `SUSPEND_FAILED` | 502 | Running container could not be stopped; nothing was changed. |
 | `REMOTE_NODE_UNSUPPORTED` / `NODE_UNREACHABLE` | 409/502 | Node cannot serve the request. |
 | `INVALID_PATH` / `SYMLINK_REJECTED` | 400 | Path escapes the container root or follows a symlink. |
 | `NOT_A_DIRECTORY` / `IS_A_DIRECTORY` | 400 | Wrong entry kind for the operation. |
@@ -426,7 +432,7 @@ The panel's **Admin → Instances** page is backed by administrator-only endpoin
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/admin/instances` | Every managed instance with joined `owner`, `node`, and live `live` state. Query: `page`, `page_size`, `q` (name/container/id/owner), `status` (incl. `transitional`, `missing`, `unavailable`), `node_id`, `owner_id`, `template`, `sort`, `order`. |
-| GET | `/api/admin/instances/stats` | Recorded-status counts plus integrity markers (`missing_owner`, `missing_node`, `unattached_node`, `node_degraded`). |
+| GET | `/api/admin/instances/stats` | Recorded-status counts (incl. `suspended`) plus integrity markers (`missing_owner`, `missing_node`, `unattached_node`, `node_degraded`). |
 | GET | `/api/admin/instances/:id` | One instance with `owner`, `node`, `live`; reconciles stored status with verified host truth. |
 | POST | `/api/admin/instances/:id/transfer` | `{ target_user_id }` — moves one instance to an existing active user without touching the container; audited as `admin.instance_transfer`. |
 

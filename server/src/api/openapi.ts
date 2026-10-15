@@ -199,7 +199,7 @@ const SCHEMAS: Record<string, SchemaObject> = {
       container_id: { type: "string", example: "web-01" },
       node_id: { type: "string", nullable: true },
       node_name: { type: "string", nullable: true },
-      status: { type: "string", enum: ["running", "stopped", "starting", "stopping", "failed", "unknown"] },
+      status: { type: "string", enum: ["running", "stopped", "starting", "stopping", "failed", "unknown", "suspended"] },
       cpu: { type: "integer" },
       memory_mb: { type: "integer" },
       storage_gb: { type: "integer" },
@@ -699,6 +699,22 @@ const DOCS: Record<string, DocEntry> = {
     description: "Destroy the exact host container, confirm it is gone, then delete the record. Administrator-only; a partial failure is reported, never hidden.",
     successSchema: envelope({ type: "object", properties: { removed: { type: "boolean" }, removedHostContainer: { type: "boolean" } } }),
     errors: [403, 404, 409, 502],
+  },
+  suspendInstance: {
+    description: "Administrator-only hold: stop a running container (verified, never assumed) and block start/stop/restart until unsuspended. When the host cannot be checked, the hold is still recorded and the unverified live state is reported honestly.",
+    successSchema: envelope({
+      type: "object",
+      properties: { instance: ref("Instance"), live: ref("LiveState") },
+    }),
+    errors: [403, 404, 409, 502],
+  },
+  unsuspendInstance: {
+    description: "Lift a suspension without starting the container. The stored status follows verified host state, falling back to `unknown` when the host cannot be checked.",
+    successSchema: envelope({
+      type: "object",
+      properties: { instance: ref("Instance"), live: ref("LiveState") },
+    }),
+    errors: [403, 404, 409],
   },
   getInstanceRepairPlan: {
     description: "Read-only comparison of the stored allocation with the effective host configuration. Nothing is modified.",

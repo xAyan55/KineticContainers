@@ -6,7 +6,7 @@ import { validate, validateQuery } from "../../middleware/validate.js";
 import { recordAudit } from "../../services/audit.js";
 import { getProvider } from "../../services/virtualization/localAgent.js";
 import { ProviderError } from "../../services/virtualization/provider.js";
-import { toPublic } from "../instances.js";
+import { reconcileStoredStatus, toPublic } from "../instances.js";
 
 /**
  * Administrator instance management (`/api/admin/instances`).
@@ -127,14 +127,14 @@ async function readLiveForRows(rows: JoinedRow[]): Promise<Map<string, LiveState
   return out;
 }
 
-const DB_STATUSES = ["running", "stopped", "starting", "stopping", "failed", "unknown"] as const;
+const DB_STATUSES = ["running", "stopped", "starting", "stopping", "failed", "unknown", "suspended"] as const;
 
 const listQuery = z.object({
   page: z.coerce.number().int().min(1).max(10_000).optional(),
   page_size: z.coerce.number().int().min(1).max(100).optional(),
   q: z.string().trim().max(200).optional(),
   status: z
-    .enum(["running", "stopped", "starting", "stopping", "transitional", "failed", "unknown", "missing", "unavailable"])
+    .enum(["running", "stopped", "starting", "stopping", "transitional", "failed", "unknown", "suspended", "missing", "unavailable"])
     .optional(),
   node_id: z.string().trim().max(128).optional(),
   owner_id: z.string().trim().max(128).optional(),
@@ -263,11 +263,11 @@ adminInstancesRouter.get("/stats", (_req, res) => {
     status: string;
     n: number;
   }[];
-  const counts: Record<string, number> = { running: 0, stopped: 0, transitional: 0, failed: 0, unknown: 0, other: 0 };
+  const counts: Record<string, number> = { running: 0, stopped: 0, transitional: 0, failed: 0, unknown: 0, suspended: 0, other: 0 };
   let total = 0;
   for (const row of byStatus) {
     total += row.n;
-    if (row.status === "running" || row.status === "stopped" || row.status === "failed" || row.status === "unknown") {
+    if (row.status === "running" || row.status === "stopped" || row.status === "failed" || row.status === "unknown" || row.status === "suspended") {
       counts[row.status] += row.n;
     } else if (row.status === "starting" || row.status === "stopping") {
       counts.transitional += row.n;
@@ -314,12 +314,9 @@ adminInstancesRouter.get("/:id", async (req, res) => {
     return;
   }
   const live = (await readLiveForRows([row])).get(String(row.id))!;
-  // Reconcile the stored status with verified host truth, like the panel detail view.
-  if (live.exists && (live.status === "running" || live.status === "stopped") && live.status !== row.status) {
-    db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run(live.status, nowIso(), row.id as string);
-    row.status = live.status;
-    row.updated_at = nowIso();
-  }
+  // Reconcile the stored status with verified host truth, like the panel
+  // detail view. Suspension is an administrative hold and is never overwritten.
+  reconcileStoredStatus(db, row, live);
   res.json({ data: adminDetail(row, live) });
 });
 

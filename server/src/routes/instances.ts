@@ -113,6 +113,29 @@ instancesRouter.get("/:id", async (req, res) => {
   }
   // Reconcile with the real host: never present stale DB status as truth.
   const live = await readLiveState(row);
+  reconcileStoredStatus(db, row, live);
+  res.json({ data: { instance: toPublic(row), live } });
+});
+
+export interface LiveState {
+  /** true = on host, false = checked and absent, null = could not check. */
+  exists: boolean | null;
+  status: string | null;
+  checkedAt: string;
+  error: string | null;
+}
+
+/**
+ * Persist verified host truth over the stored status. Suspension is an
+ * administrative hold, not a host fact, so it is never overwritten here —
+ * only the suspend/unsuspend endpoints change it.
+ */
+export function reconcileStoredStatus(
+  db: ReturnType<typeof getDb>,
+  row: InstanceRow,
+  live: LiveState
+): boolean {
+  if (row.status === "suspended") return false;
   if (live.exists && (live.status === "running" || live.status === "stopped") && live.status !== row.status) {
     db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run(
       live.status,
@@ -121,16 +144,9 @@ instancesRouter.get("/:id", async (req, res) => {
     );
     row.status = live.status;
     row.updated_at = nowIso();
+    return true;
   }
-  res.json({ data: { instance: toPublic(row), live } });
-});
-
-interface LiveState {
-  /** true = on host, false = checked and absent, null = could not check. */
-  exists: boolean | null;
-  status: string | null;
-  checkedAt: string;
-  error: string | null;
+  return false;
 }
 
 async function readLiveState(row: InstanceRow): Promise<LiveState> {
@@ -545,6 +561,14 @@ instancesRouter.post("/:id/actions", async (req, res) => {
       return;
     }
   }
+  if (row.status === "suspended") {
+    // A suspended VPS stays put until an administrator lifts the hold.
+    // ("remove" returns above; destruction is still allowed.)
+    res.status(403).json({
+      error: { code: "INSTANCE_SUSPENDED", message: "This VPS is suspended. Unsuspend it before start, stop, or restart." },
+    });
+    return;
+  }
   const provider = getProvider();
   const action = parsed.data.action;
   const previousStatus = String(row.status);
@@ -564,7 +588,7 @@ instancesRouter.post("/:id/actions", async (req, res) => {
     }
     // Confirm against the host; only then persist. Never fake success.
     const live = await readLiveState(row);
-    if (live.exists && live.status) {
+    if (row.status !== "suspended" && live.exists && live.status) {
       db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run(
         live.status,
         nowIso(),
@@ -595,6 +619,102 @@ instancesRouter.post("/:id/actions", async (req, res) => {
     });
     providerError(res, err);
   }
+});
+
+/**
+ * Suspend: admin-only hold that stops a running container (when the host can
+ * be verified) and blocks start/stop/restart until lifted. When the host
+ * cannot be checked, the hold is still recorded — the response reports the
+ * unverified live state honestly instead of claiming the container stopped.
+ */
+instancesRouter.post("/:id/suspend", async (req, res) => {
+  const db = getDb();
+  const row = getManagedInstance(db, req.params.id, req.user!);
+  if (!row) {
+    notFound(res);
+    return;
+  }
+  if (req.user!.role !== "admin") {
+    forbidden(res);
+    return;
+  }
+  if (row.status === "suspended") {
+    res.status(409).json({ error: { code: "ALREADY_SUSPENDED", message: "Instance is already suspended." } });
+    return;
+  }
+  const previousStatus = String(row.status);
+  try {
+    const live = await readLiveState(row);
+    if (live.exists && live.status === "running") {
+      const provider = getProvider();
+      if (!provider.capabilities.stop) {
+        res.status(409).json({
+          error: { code: "UNSUPPORTED", message: "This operation is not supported by the current integration." },
+        });
+        return;
+      }
+      await provider.stopContainer(String(row.node_id), String(row.container_id));
+      const confirm = await readLiveState(row);
+      if (!(confirm.exists && confirm.status === "stopped")) {
+        res.status(502).json({
+          error: { code: "SUSPEND_FAILED", message: "Container could not be stopped; suspend aborted with nothing changed." },
+        });
+        return;
+      }
+    }
+    db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run(
+      "suspended",
+      nowIso(),
+      row.id as string
+    );
+    row.status = "suspended";
+    row.updated_at = nowIso();
+    recordAudit(db, {
+      actorId: req.user!.id,
+      action: "instance.suspend",
+      targetType: "instance",
+      targetId: row.id as string,
+      detail: { previous_status: previousStatus, container_id: row.container_id, host_verified: live.exists === true },
+    });
+    res.json({ data: { instance: toPublic(row), live } });
+  } catch (err) {
+    providerError(res, err);
+  }
+});
+
+/**
+ * Unsuspend: lift the administrative hold. The container is not started —
+ * that remains an explicit power action. The stored status follows verified
+ * host truth, falling back to `unknown` when the host cannot be checked.
+ */
+instancesRouter.post("/:id/unsuspend", async (req, res) => {
+  const db = getDb();
+  const row = getManagedInstance(db, req.params.id, req.user!);
+  if (!row) {
+    notFound(res);
+    return;
+  }
+  if (req.user!.role !== "admin") {
+    forbidden(res);
+    return;
+  }
+  if (row.status !== "suspended") {
+    res.status(409).json({ error: { code: "NOT_SUSPENDED", message: "Instance is not suspended." } });
+    return;
+  }
+  const live = await readLiveState(row);
+  const next = live.exists && live.status === "running" ? "running" : live.exists && live.status === "stopped" ? "stopped" : "unknown";
+  db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run(next, nowIso(), row.id as string);
+  row.status = next;
+  row.updated_at = nowIso();
+  recordAudit(db, {
+    actorId: req.user!.id,
+    action: "instance.unsuspend",
+    targetType: "instance",
+    targetId: row.id as string,
+    detail: { previous_status: "suspended", status: next, container_id: row.container_id },
+  });
+  res.json({ data: { instance: toPublic(row), live } });
 });
 
 export const templatesRouter = Router();

@@ -55,6 +55,7 @@ interface InstanceStats {
   transitional: number;
   failed: number;
   unknown: number;
+  suspended: number;
   other: number;
   missing_owner: number;
   missing_node: number;
@@ -76,6 +77,7 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "transitional", label: "Starting or stopping" },
   { value: "failed", label: "Failed" },
   { value: "unknown", label: "Unknown" },
+  { value: "suspended", label: "Suspended" },
   { value: "missing", label: "Missing container" },
   { value: "unavailable", label: "Host state unavailable" },
 ];
@@ -226,12 +228,13 @@ export function AdminInstancesPage(): React.JSX.Element {
       <InlineAlert message={error} />
 
       {stats ? (
-        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-label="Instance statistics">
+        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7" aria-label="Instance statistics">
           <Stat label="Total managed" value={stats.total} />
           <Stat label="Running (recorded)" value={stats.running} />
           <Stat label="Stopped (recorded)" value={stats.stopped} />
           <Stat label="Starting / stopping" value={stats.transitional} />
           <Stat label="Failed" value={stats.failed} />
+          <Stat label="Suspended" value={stats.suspended} />
           <Stat label="Unknown" value={stats.unknown + stats.other} />
         </div>
       ) : null}

@@ -85,13 +85,13 @@ export function DashboardPage(): React.JSX.Element {
                       >
                         Manage
                       </Link>
-                      <button type="button" disabled={acting !== null} onClick={() => void act(i.id, "start")} aria-label={`Start ${i.name}`} title="Start" className="rounded border border-border p-1.5 text-muted hover:text-primary disabled:opacity-50">
+                      <button type="button" disabled={acting !== null || i.status === "suspended"} onClick={() => void act(i.id, "start")} aria-label={`Start ${i.name}`} title={i.status === "suspended" ? "Suspended" : "Start"} className="rounded border border-border p-1.5 text-muted hover:text-primary disabled:opacity-50">
                         <Power className="h-3.5 w-3.5" aria-hidden="true" />
                       </button>
-                      <button type="button" disabled={acting !== null} onClick={() => void act(i.id, "stop")} aria-label={`Stop ${i.name}`} title="Stop" className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-primary disabled:opacity-50">
+                      <button type="button" disabled={acting !== null || i.status === "suspended"} onClick={() => void act(i.id, "stop")} aria-label={`Stop ${i.name}`} title={i.status === "suspended" ? "Suspended" : "Stop"} className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-primary disabled:opacity-50">
                         Stop
                       </button>
-                      <button type="button" disabled={acting !== null} onClick={() => void act(i.id, "restart")} aria-label={`Restart ${i.name}`} title="Restart" className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-primary disabled:opacity-50">
+                      <button type="button" disabled={acting !== null || i.status === "suspended"} onClick={() => void act(i.id, "restart")} aria-label={`Restart ${i.name}`} title={i.status === "suspended" ? "Suspended" : "Restart"} className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-primary disabled:opacity-50">
                         Restart
                       </button>
                     </div>

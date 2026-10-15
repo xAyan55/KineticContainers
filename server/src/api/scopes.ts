@@ -82,6 +82,13 @@ export const SCOPE_DEFINITIONS: ScopeDefinition[] = [
     sensitive: true,
   },
   {
+    id: "instances:suspend",
+    label: "Suspend VPS instances",
+    group: "Instances",
+    description: "Suspend and unsuspend containers. Suspension stops the container and blocks power operations until lifted.",
+    sensitive: true,
+  },
+  {
     id: "instances:resources:read",
     label: "Read VPS resources",
     group: "Instances",
