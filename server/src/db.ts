@@ -210,7 +210,16 @@ const DEFAULT_SETTINGS: Record<string, string> = {
 export function resolveDatabasePath(): string {
   const fromEnv = process.env.DATABASE_PATH?.trim();
   if (fromEnv) return path.resolve(process.cwd(), fromEnv);
-  return path.resolve(process.cwd(), "data", "kineticct.sqlite");
+  // The data directory belongs to the checkout, not to whichever subdirectory
+  // the process happens to start in: PM2 uses `--cwd server/`, npm runs the
+  // migrate script from the workspace, and install.sh runs from the root.
+  // Resolving from this module's location (server/dist) keeps every entry
+  // point on the same database instead of silently creating an empty one.
+  const checkoutDb = path.resolve(__dirname, "..", "..", "data", "kineticct.sqlite");
+  const cwdDb = path.resolve(process.cwd(), "data", "kineticct.sqlite");
+  // Keep honouring a database written by an older single-directory layout.
+  if (!fs.existsSync(checkoutDb) && fs.existsSync(cwdDb)) return cwdDb;
+  return checkoutDb;
 }
 
 let dbInstance: Database.Database | null = null;

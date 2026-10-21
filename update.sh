@@ -82,6 +82,11 @@ npm run build --workspace=frontend || die "Frontend build failed."
 npm run build --workspace=server || die "Backend build failed."
 
 say "Migrating database ..."
+# Pin the database to the checkout's data/ so migrate and the panel (which PM2
+# starts with --cwd server/) are guaranteed to use the same file. Without this
+# the app would resolve its path from its own cwd and could create a second,
+# empty database, leaving every instance/console looking missing.
+export DATABASE_PATH="$DIR/data/kineticct.sqlite"
 npm run migrate --workspace=server || die "Migrations failed."
 
 command -v pm2 >/dev/null 2>&1 || npm install -g pm2 --no-audit --no-fund || die "PM2 is missing and could not be installed."
