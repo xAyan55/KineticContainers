@@ -217,8 +217,11 @@ export function resolveDatabasePath(): string {
   // point on the same database instead of silently creating an empty one.
   const checkoutDb = path.resolve(__dirname, "..", "..", "data", "kineticct.sqlite");
   const cwdDb = path.resolve(process.cwd(), "data", "kineticct.sqlite");
-  // Keep honouring a database written by an older single-directory layout.
-  if (!fs.existsSync(checkoutDb) && fs.existsSync(cwdDb)) return cwdDb;
+  // Prefer the database that actually holds data. Only ever create a new file
+  // at the checkout root, never at the cwd, so a stray empty database cannot
+  // shadow the real one.
+  if (fs.existsSync(checkoutDb)) return checkoutDb;
+  if (fs.existsSync(cwdDb)) return cwdDb;
   return checkoutDb;
 }
 
