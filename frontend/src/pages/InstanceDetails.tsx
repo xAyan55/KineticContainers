@@ -13,7 +13,7 @@ import {
   StickyNote,
   Terminal as TerminalIcon,
 } from "lucide-react";
-import { ApiError, api, type Instance } from "@/lib/api";
+import { ApiError, api, apiBase, type Instance } from "@/lib/api";
 import { useAuth } from "@/features/auth/AuthContext";
 import {
   Button,
@@ -242,7 +242,7 @@ export function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onR
   );
 }
 
-type ConsolePhase = "checking" | "ready" | "unsupported" | "connecting" | "open" | "closed" | "error";
+type ConsolePhase = "checking" | "connecting" | "open" | "closed" | "unsupported" | "error";
 
 export function ConsoleTab({ instanceId }: { instanceId: string }) {
   const [phase, setPhase] = React.useState<ConsolePhase>("checking");
@@ -251,21 +251,6 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
   const boxRef = React.useRef<HTMLDivElement | null>(null);
   const sessionRef = React.useRef<{ term: Terminal; ws: WebSocket } | null>(null);
 
-  const disconnect = React.useCallback(() => {
-    const s = sessionRef.current;
-    sessionRef.current = null;
-    try {
-      s?.ws.close(1000, "client disconnect");
-    } catch {
-      /* ignore */
-    }
-    try {
-      s?.term.dispose();
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
   React.useEffect(() => {
     let cancelled = false;
     api
@@ -273,7 +258,7 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
       .then((d) => {
         if (cancelled) return;
         if (d.supported) {
-          setPhase("ready");
+          setPhase("connecting");
         } else {
           setPhase("unsupported");
           setReason(d.reason ?? "Console unavailable.");
@@ -286,15 +271,18 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
       });
     return () => {
       cancelled = true;
-      disconnect();
     };
-  }, [instanceId, disconnect]);
+  }, [instanceId]);
 
-  const connect = React.useCallback((): void => {
-    if (!boxRef.current || sessionRef.current) return;
-    setPhase("connecting");
-    setDetail("");
-    // xterm is loaded on demand so the main bundle stays lean.
+  React.useEffect(() => {
+    if (phase !== "connecting") return;
+    if (!boxRef.current) return;
+
+    let cancelled = false;
+    let ws: WebSocket | null = null;
+    let term: Terminal | null = null;
+    let ro: ResizeObserver | null = null;
+
     void (async () => {
       let TerminalCtor: typeof import("@xterm/xterm").Terminal;
       let FitAddonCtor: typeof import("@xterm/addon-fit").FitAddon;
@@ -305,12 +293,17 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
         TerminalCtor = xterm.Terminal;
         FitAddonCtor = fitAddon.FitAddon;
       } catch {
+        if (cancelled) return;
         setPhase("error");
         setDetail("Could not load the terminal component.");
         return;
       }
-      if (!boxRef.current || sessionRef.current) return;
-      const term = new TerminalCtor({
+
+      if (cancelled || !boxRef.current) return;
+
+      boxRef.current.replaceChildren();
+
+      term = new TerminalCtor({
         cursorBlink: true,
         fontSize: 14,
         theme: {
@@ -324,65 +317,108 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
       term.loadAddon(fit);
       term.open(boxRef.current);
       fit.fit();
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${window.location.host}/api/instances/${instanceId}/console`);
-    sessionRef.current = { term, ws };
-    ws.onopen = () => {
-      setPhase("open");
-      fit.fit();
-      ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-      term.focus();
-    };
-    ws.onmessage = (ev: MessageEvent) => {
-      let msg: { type?: string; data?: string; message?: string };
+
       try {
-        msg = JSON.parse(String(ev.data));
+        ro = new ResizeObserver(() => {
+          try {
+            fit.fit();
+          } catch {
+            /* ignore */
+          }
+        });
+        ro.observe(boxRef.current);
       } catch {
-        return;
+        /* ignore */
       }
-      if (msg.type === "output" && typeof msg.data === "string") {
-        term.write(msg.data);
-      } else if (msg.type === "error") {
-        setDetail(msg.message ?? "Console error.");
-      } else if (msg.type === "exit") {
+
+      const wsPath = `/api/instances/${instanceId}/console`;
+      let wsUrl: string;
+      if (apiBase) {
+        try {
+          const u = new URL(apiBase, window.location.href);
+          const proto = u.protocol === "https:" ? "wss:" : "ws:";
+          wsUrl = `${proto}//${u.host}${wsPath}`;
+        } catch {
+          const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+          wsUrl = `${proto}//${window.location.host}${wsPath}`;
+        }
+      } else {
+        const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        wsUrl = `${proto}//${window.location.host}${wsPath}`;
+      }
+
+      ws = new WebSocket(wsUrl);
+      sessionRef.current = { term, ws };
+
+      ws.onopen = () => {
+        if (cancelled) return;
+        setPhase("open");
+        fit.fit();
+        ws?.send(JSON.stringify({ type: "resize", cols: term?.cols ?? 80, rows: term?.rows ?? 24 }));
+        term?.focus();
+      };
+
+      ws.onmessage = (ev: MessageEvent) => {
+        let msg: { type?: string; data?: string; message?: string };
+        try {
+          msg = JSON.parse(String(ev.data));
+        } catch {
+          return;
+        }
+        if (msg.type === "output" && typeof msg.data === "string") {
+          term?.write(msg.data);
+        } else if (msg.type === "error") {
+          setDetail(msg.message ?? "Console error.");
+        } else if (msg.type === "exit") {
+          setPhase("closed");
+          setDetail("Session ended.");
+        }
+      };
+
+      const onEnd = (): void => {
+        if (cancelled) return;
         setPhase("closed");
-        setDetail("Session ended.");
+      };
+
+      ws.onclose = onEnd;
+      ws.onerror = () => {
+        if (cancelled) return;
+        setDetail("Connection failed. The container may have stopped or the session was rejected.");
+      };
+
+      term.onData((data: string) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "input", data }));
+        }
+      });
+
+      term.onResize(({ cols, rows }) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "resize", cols, rows }));
+        }
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      if (ro) ro.disconnect();
+      if (ws) {
+        try {
+          ws.close(1000, "client disconnect");
+        } catch {
+          /* ignore */
+        }
       }
-    };
-    const onEnd = (): void => {
-      if (sessionRef.current) {
-        sessionRef.current = null;
+      if (term) {
         try {
           term.dispose();
         } catch {
           /* ignore */
         }
       }
-      // Any ending — clean close, failure mid-handshake, or error — lands on
-      // "closed" so the user gets a Reconnect button instead of a stuck spinner.
-      setPhase("closed");
+      sessionRef.current = null;
     };
-    ws.onclose = onEnd;
-    ws.onerror = () => {
-      setDetail("Connection failed. The container may have stopped or the session was rejected.");
-    };
-    term.onData((data: string) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "input", data }));
-      }
-    });
-    term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols, rows }));
-      }
-    });
-    })();
-  }, [instanceId]);
-
-  // Connect automatically once the preflight passes — no click required.
-  React.useEffect(() => {
-    if (phase === "ready") connect();
-  }, [phase, connect]);
+  }, [phase, instanceId]);
 
   return (
     <Card>
@@ -399,14 +435,27 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
         <div className="flex flex-col gap-3">
           {phase === "closed" && (
             <div>
-              <Button type="button" onClick={connect}>
+              <Button
+                type="button"
+                onClick={() => {
+                  setDetail("");
+                  setPhase("connecting");
+                }}
+              >
                 Reconnect
               </Button>
             </div>
           )}
           {phase === "connecting" ? <p className="text-sm text-muted" role="status">Connecting…</p> : null}
           {phase === "open" && (
-            <Button type="button" variant="ghost" onClick={() => { disconnect(); setPhase("closed"); }}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setPhase("closed");
+                setDetail("Session disconnected.");
+              }}
+            >
               Disconnect
             </Button>
           )}

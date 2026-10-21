@@ -192,15 +192,23 @@ function originAllowed(origin: string | undefined, host: string | undefined): bo
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
   const lower = origin.toLowerCase();
+  if (corsOrigins.some((o) => o && (lower === o || lower.startsWith(o)))) return true;
   if (host) {
     try {
+      const parsed = new URL(lower);
+      const hosts = host.split(",").map((h) => h.trim().toLowerCase());
+      for (const h of hosts) {
+        if (parsed.host === h || parsed.hostname === h) return true;
+        if (`${parsed.protocol}//${h}` === lower) return true;
+        const [hName] = h.split(":");
+        if (parsed.hostname === hName) return true;
+      }
+    } catch {
       const expected = `${lower.startsWith("https") ? "https" : "http"}://${host.toLowerCase()}`;
       if (lower === expected) return true;
-    } catch {
-      return false;
     }
   }
-  return corsOrigins.some((o) => o && lower.startsWith(o));
+  return false;
 }
 
 function openConsole(ws: WebSocket, req: IncomingMessage, instanceId: string): void {
@@ -350,7 +358,9 @@ export function attachConsoleGateway(server: HttpServer): void {
       return;
     }
     const origin = Array.isArray(req.headers.origin) ? req.headers.origin[0] : req.headers.origin;
-    const host = Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host;
+    const fwdHost = Array.isArray(req.headers["x-forwarded-host"]) ? req.headers["x-forwarded-host"][0] : req.headers["x-forwarded-host"];
+    const rawHost = Array.isArray(req.headers.host) ? req.headers.host[0] : req.headers.host;
+    const host = fwdHost || rawHost;
     if (!originAllowed(origin, host)) {
       try {
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
