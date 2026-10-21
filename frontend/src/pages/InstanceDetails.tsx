@@ -25,7 +25,9 @@ import {
   PageHeader,
   StatusBadge,
 } from "@/components/ui/primitives";
-import type { Terminal } from "@xterm/xterm";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
 import { FilesTab } from "@/pages/InstanceFiles";
 
 const LiveConsumptionCharts = React.lazy(() =>
@@ -248,9 +250,11 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
   const [phase, setPhase] = React.useState<ConsolePhase>("checking");
   const [reason, setReason] = React.useState<string>("");
   const [detail, setDetail] = React.useState<string>("");
+  const [connectSeq, setConnectSeq] = React.useState(0);
   const boxRef = React.useRef<HTMLDivElement | null>(null);
   const sessionRef = React.useRef<{ term: Terminal; ws: WebSocket } | null>(null);
 
+  // 1. Initial preflight check
   React.useEffect(() => {
     let cancelled = false;
     api
@@ -259,6 +263,7 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
         if (cancelled) return;
         if (d.supported) {
           setPhase("connecting");
+          setConnectSeq((s) => s + 1);
         } else {
           setPhase("unsupported");
           setReason(d.reason ?? "Console unavailable.");
@@ -274,151 +279,128 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
     };
   }, [instanceId]);
 
+  // 2. Terminal session lifecycle - driven by connectSeq, NOT phase!
   React.useEffect(() => {
-    if (phase !== "connecting") return;
-    if (!boxRef.current) return;
+    if (connectSeq === 0) return;
+    const box = boxRef.current;
+    if (!box) return;
 
-    let cancelled = false;
-    let ws: WebSocket | null = null;
-    let term: Terminal | null = null;
-    let ro: ResizeObserver | null = null;
+    box.replaceChildren();
 
-    void (async () => {
-      let TerminalCtor: typeof import("@xterm/xterm").Terminal;
-      let FitAddonCtor: typeof import("@xterm/addon-fit").FitAddon;
+    const term = new Terminal({
+      cursorBlink: true,
+      cursorStyle: "block",
+      fontSize: 14,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      theme: {
+        background: "#000000",
+        foreground: "#F5F5F5",
+        cursor: "#F5F5F5",
+        selectionBackground: "#303030",
+      },
+    });
+
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(box);
+
+    const fitTerminal = () => {
       try {
-        const xterm = await import("@xterm/xterm");
-        const fitAddon = await import("@xterm/addon-fit");
-        await import("@xterm/xterm/css/xterm.css");
-        TerminalCtor = xterm.Terminal;
-        FitAddonCtor = fitAddon.FitAddon;
-      } catch {
-        if (cancelled) return;
-        setPhase("error");
-        setDetail("Could not load the terminal component.");
-        return;
-      }
-
-      if (cancelled || !boxRef.current) return;
-
-      boxRef.current.replaceChildren();
-
-      term = new TerminalCtor({
-        cursorBlink: true,
-        fontSize: 14,
-        theme: {
-          background: "#000000",
-          foreground: "#F5F5F5",
-          cursor: "#F5F5F5",
-          selectionBackground: "#303030",
-        },
-      });
-      const fit = new FitAddonCtor();
-      term.loadAddon(fit);
-      term.open(boxRef.current);
-      fit.fit();
-
-      try {
-        ro = new ResizeObserver(() => {
-          try {
-            fit.fit();
-          } catch {
-            /* ignore */
-          }
-        });
-        ro.observe(boxRef.current);
+        if (box.clientWidth > 0 && box.clientHeight > 0) {
+          fit.fit();
+        }
       } catch {
         /* ignore */
       }
+    };
 
-      const wsPath = `/api/instances/${instanceId}/console`;
-      let wsUrl: string;
-      if (apiBase) {
-        try {
-          const u = new URL(apiBase, window.location.href);
-          const proto = u.protocol === "https:" ? "wss:" : "ws:";
-          wsUrl = `${proto}//${u.host}${wsPath}`;
-        } catch {
-          const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-          wsUrl = `${proto}//${window.location.host}${wsPath}`;
-        }
-      } else {
+    requestAnimationFrame(fitTerminal);
+
+    const ro = new ResizeObserver(() => {
+      fitTerminal();
+    });
+    ro.observe(box);
+
+    const wsPath = `/api/instances/${instanceId}/console`;
+    let wsUrl: string;
+    if (apiBase) {
+      try {
+        const u = new URL(apiBase, window.location.href);
+        const proto = u.protocol === "https:" ? "wss:" : "ws:";
+        wsUrl = `${proto}//${u.host}${wsPath}`;
+      } catch {
         const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
         wsUrl = `${proto}//${window.location.host}${wsPath}`;
       }
+    } else {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      wsUrl = `${proto}//${window.location.host}${wsPath}`;
+    }
 
-      ws = new WebSocket(wsUrl);
-      sessionRef.current = { term, ws };
+    const ws = new WebSocket(wsUrl);
+    sessionRef.current = { term, ws };
 
-      ws.onopen = () => {
-        if (cancelled) return;
-        setPhase("open");
-        fit.fit();
-        ws?.send(JSON.stringify({ type: "resize", cols: term?.cols ?? 80, rows: term?.rows ?? 24 }));
-        term?.focus();
-      };
+    ws.onopen = () => {
+      setPhase("open");
+      fitTerminal();
+      ws.send(JSON.stringify({ type: "resize", cols: term.cols || 80, rows: term.rows || 24 }));
+      term.focus();
+    };
 
-      ws.onmessage = (ev: MessageEvent) => {
-        let msg: { type?: string; data?: string; message?: string };
-        try {
-          msg = JSON.parse(String(ev.data));
-        } catch {
-          return;
-        }
-        if (msg.type === "output" && typeof msg.data === "string") {
-          term?.write(msg.data);
-        } else if (msg.type === "error") {
-          setDetail(msg.message ?? "Console error.");
-        } else if (msg.type === "exit") {
-          setPhase("closed");
-          setDetail("Session ended.");
-        }
-      };
-
-      const onEnd = (): void => {
-        if (cancelled) return;
+    ws.onmessage = (ev: MessageEvent) => {
+      let msg: { type?: string; data?: string; message?: string };
+      try {
+        msg = JSON.parse(String(ev.data));
+      } catch {
+        return;
+      }
+      if (msg.type === "output" && typeof msg.data === "string") {
+        term.write(msg.data);
+      } else if (msg.type === "error") {
+        setDetail(msg.message ?? "Console error.");
+      } else if (msg.type === "exit") {
         setPhase("closed");
-      };
+        setDetail("Session ended.");
+      }
+    };
 
-      ws.onclose = onEnd;
-      ws.onerror = () => {
-        if (cancelled) return;
-        setDetail("Connection failed. The container may have stopped or the session was rejected.");
-      };
+    ws.onclose = () => {
+      setPhase("closed");
+    };
 
-      term.onData((data: string) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "input", data }));
-        }
-      });
+    ws.onerror = () => {
+      setDetail("Connection failed. The container may have stopped or the session was rejected.");
+    };
 
-      term.onResize(({ cols, rows }) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "resize", cols, rows }));
-        }
-      });
-    })();
+    const dataSub = term.onData((data: string) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "input", data }));
+      }
+    });
+
+    const resizeSub = term.onResize(({ cols, rows }) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols, rows }));
+      }
+    });
 
     return () => {
-      cancelled = true;
-      if (ro) ro.disconnect();
-      if (ws) {
-        try {
-          ws.close(1000, "client disconnect");
-        } catch {
-          /* ignore */
-        }
+      dataSub.dispose();
+      resizeSub.dispose();
+      ro.disconnect();
+      try {
+        ws.close(1000, "client disconnect");
+      } catch {
+        /* ignore */
       }
-      if (term) {
-        try {
-          term.dispose();
-        } catch {
-          /* ignore */
-        }
+      try {
+        term.dispose();
+      } catch {
+        /* ignore */
       }
       sessionRef.current = null;
     };
-  }, [phase, instanceId]);
+  }, [connectSeq, instanceId]);
 
   return (
     <Card>
@@ -440,6 +422,7 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
                 onClick={() => {
                   setDetail("");
                   setPhase("connecting");
+                  setConnectSeq((s) => s + 1);
                 }}
               >
                 Reconnect
@@ -452,6 +435,7 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
               type="button"
               variant="ghost"
               onClick={() => {
+                sessionRef.current?.ws.close(1000, "user disconnect");
                 setPhase("closed");
                 setDetail("Session disconnected.");
               }}
@@ -460,7 +444,15 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
             </Button>
           )}
           <InlineAlert message={detail || undefined} />
-          <div ref={boxRef} className="min-h-[320px] overflow-hidden rounded-md border border-border bg-black" aria-label="Container terminal" />
+          <div
+            ref={boxRef}
+            onClick={() => {
+              sessionRef.current?.term.focus();
+            }}
+            tabIndex={0}
+            className="min-h-[360px] h-[420px] cursor-text overflow-hidden rounded-md border border-border bg-black p-2 focus:outline-none focus:ring-1 focus:ring-primary"
+            aria-label="Container terminal"
+          />
         </div>
       ) : null}
     </Card>
