@@ -188,6 +188,7 @@ scope; *(public)* means no key is needed.
 | POST | `/instances` | `instances:create` | Provision. `201` sync, `202` with `async: true`. |
 | GET | `/instances/:id` | `instances:read` | Ownership enforced (admins see all). |
 | PATCH | `/instances/:id` | `instances:settings:write` | Rename. |
+| PATCH | `/instances/:id/notes` | `instances:settings:write` | Set or clear the administrator note (single field, Proxmox-style). Admin-only. Everyone who can see the instance can read it; an empty value clears it. Audited as `instance.notes`. |
 | DELETE | `/instances/:id` | `instances:delete` | Destroy + remove record. |
 | GET | `/instances/:id/live` | `instances:read` | Live status, metrics, storage. |
 | GET | `/instances/:id/network` | `instances:network:read` | Live network config/addresses. |

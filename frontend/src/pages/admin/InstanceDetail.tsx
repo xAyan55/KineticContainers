@@ -15,6 +15,7 @@ import {
 import {
   ConsoleTab,
   NetworkTab,
+  NotesTab,
   OverviewTab,
   ResourcesTab,
   SettingsTab,
@@ -283,6 +284,7 @@ export function AdminInstanceDetailPage(): React.JSX.Element {
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
             <TabErrorBoundary key={tab}>
               {tab === "overview" && <OverviewTab detail={detail} onRefresh={refresh} />}
+              {tab === "notes" && <NotesTab detail={detail} onRefresh={refresh} isAdmin />}
               {tab === "console" && <ConsoleTab instanceId={detail.instance.id} />}
               {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin />}
               {tab === "network" && <NetworkTab detail={detail} />}

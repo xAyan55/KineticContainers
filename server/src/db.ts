@@ -181,6 +181,20 @@ const MIGRATIONS: Migration[] = [
     CREATE INDEX IF NOT EXISTS idx_operations_instance ON operations(instance_id);
     `,
   },
+  {
+    // Per-instance administrator note: a single free-text field, shown to
+    // everyone who can see the instance and editable by administrators only.
+    // Implemented as code (not pure SQL) so a database that already carries
+    // the column upgrades without an ALTER error, matching the cautious
+    // pattern used for the node columns.
+    version: 4,
+    run: (db: Database.Database) => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(instances)").all() as { name: string }[]).map((r) => r.name)
+      );
+      if (!cols.has("notes")) db.exec("ALTER TABLE instances ADD COLUMN notes TEXT");
+    },
+  },
 ];
 
 const DEFAULT_SETTINGS: Record<string, string> = {

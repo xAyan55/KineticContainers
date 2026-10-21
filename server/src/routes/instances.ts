@@ -45,6 +45,9 @@ export function toPublic(row: Record<string, unknown>): Record<string, unknown> 
     storage_gb: row.storage_gb,
     template: row.template,
     ip_address: row.ip_address,
+    // Administrator note (Proxmox-style): visible to everyone who can see the
+    // instance, editable by administrators only.
+    notes: row.notes ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -375,6 +378,45 @@ instancesRouter.patch("/:id", validate(renameSchema), (req, res) => {
     targetType: "instance",
     targetId: row.id as string,
     detail: { name: (req.body.name as string).trim() },
+  });
+  const fresh = db.prepare("SELECT * FROM instances WHERE id = ?").get(row.id as string) as InstanceRow;
+  res.json({ data: { instance: toPublic(fresh) } });
+});
+
+const notesSchema = z.object({
+  notes: z.string().max(4000, "Notes must be 4000 characters or fewer."),
+});
+
+/**
+ * Administrator note attached to a VPS (Proxmox-style single field). Everyone
+ * who can see the instance can read it; only administrators may change it via
+ * this endpoint. An empty (or whitespace-only) value clears the note. The note
+ * is administrative metadata: it never touches the host container and is
+ * allowed regardless of power or suspension state.
+ */
+instancesRouter.patch("/:id/notes", validate(notesSchema), (req, res) => {
+  const db = getDb();
+  const row = getManagedInstance(db, req.params.id, req.user!);
+  if (!row) {
+    notFound(res);
+    return;
+  }
+  if (req.user!.role !== "admin") {
+    forbidden(res);
+    return;
+  }
+  const trimmed = (req.body.notes as string).trim();
+  db.prepare("UPDATE instances SET notes = ?, updated_at = ? WHERE id = ?").run(
+    trimmed.length > 0 ? trimmed : null,
+    nowIso(),
+    row.id as string
+  );
+  recordAudit(db, {
+    actorId: req.user!.id,
+    action: "instance.notes",
+    targetType: "instance",
+    targetId: row.id as string,
+    detail: { length: trimmed.length, cleared: trimmed.length === 0 },
   });
   const fresh = db.prepare("SELECT * FROM instances WHERE id = ?").get(row.id as string) as InstanceRow;
   res.json({ data: { instance: toPublic(fresh) } });

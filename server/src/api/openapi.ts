@@ -149,7 +149,7 @@ const SCHEMAS: Record<string, SchemaObject> = {
     properties: {
       api_version: { type: "string", example: "v1" },
       app_version: { type: "string", example: APP_VERSION },
-      schema_version: { type: "integer", example: 3 },
+      schema_version: { type: "integer", example: 4 },
       contract: { type: "object", additionalProperties: { type: "string" } },
       compatibility: { type: "string" },
     },
@@ -205,6 +205,7 @@ const SCHEMAS: Record<string, SchemaObject> = {
       storage_gb: { type: "integer" },
       template: { type: "string", nullable: true },
       ip_address: { type: "string", nullable: true },
+      notes: { type: "string", nullable: true, description: "Administrator note (Proxmox-style), visible to everyone who can see the instance. Editable by administrators only." },
       created_at: { type: "string", format: "date-time" },
       updated_at: { type: "string", format: "date-time" },
     },
@@ -691,6 +692,21 @@ const DOCS: Record<string, DocEntry> = {
       required: true,
       schema: { type: "object", required: ["name"], properties: { name: { type: "string", minLength: 2, maxLength: 63 } } },
       example: { name: "web-02" },
+    },
+    successSchema: envelope({ type: "object", properties: { instance: ref("Instance") } }),
+    errors: [400, 403, 404],
+  },
+  updateInstanceNotes: {
+    description:
+      "Set or clear the administrator note on a VPS. A single free-text field (Proxmox-style) visible to everyone who can see the instance; only administrators may change it. Sending an empty or whitespace-only value clears the note. The note is metadata only and never affects the host container.",
+    requestBody: {
+      required: true,
+      schema: {
+        type: "object",
+        required: ["notes"],
+        properties: { notes: { type: "string", maxLength: 4000, description: "Note text; empty clears it." } },
+      },
+      example: { notes: "Renewal due 2026-11-01. Contact the customer before suspending." },
     },
     successSchema: envelope({ type: "object", properties: { instance: ref("Instance") } }),
     errors: [400, 403, 404],

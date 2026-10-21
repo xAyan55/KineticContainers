@@ -10,6 +10,7 @@ import {
   RefreshCw,
   RotateCcw,
   Square,
+  StickyNote,
   Terminal as TerminalIcon,
 } from "lucide-react";
 import { ApiError, api, type Instance } from "@/lib/api";
@@ -954,10 +955,111 @@ export function SettingsTab({
   );
 }
 
-export type TabId = "overview" | "console" | "resources" | "network" | "files" | "settings";
+export function NotesTab({
+  detail,
+  onRefresh,
+  isAdmin,
+}: {
+  detail: InstanceDetail;
+  onRefresh: () => void;
+  isAdmin: boolean;
+}) {
+  const i = detail.instance;
+  const [value, setValue] = React.useState(i.notes ?? "");
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | undefined>();
+  const [notice, setNotice] = React.useState<string | undefined>();
+
+  // Follow server truth: when the instance (re)loads, adopt its note.
+  React.useEffect(() => {
+    setValue(i.notes ?? "");
+  }, [i.notes, i.id]);
+
+  const save = async (next: string): Promise<void> => {
+    setSaving(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await api.patch(`/api/instances/${i.id}/notes`, { notes: next });
+      setNotice(next.trim().length === 0 ? "Note cleared." : "Note saved.");
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not save the note.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-primary">
+        <StickyNote className="h-4 w-4" aria-hidden="true" /> Notes
+      </h2>
+      <p className="mb-4 text-xs text-muted">
+        {isAdmin
+          ? "Visible to everyone who can see this VPS. Only administrators can edit it; an empty note is cleared."
+          : "Written by an administrator and read-only for VPS owners."}
+      </p>
+      <InlineAlert message={error} />
+      {notice ? (
+        <div role="status" className="mb-3 rounded-md border border-border bg-raised px-3 py-2 text-sm text-primary">
+          {notice}
+        </div>
+      ) : null}
+      {isAdmin ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save(value);
+          }}
+          className="flex flex-col gap-3"
+        >
+          <Label htmlFor="instance-notes">Note</Label>
+          <textarea
+            id="instance-notes"
+            className="kct-input min-h-[160px] w-full font-mono text-sm"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            maxLength={4000}
+            disabled={saving}
+            placeholder="Administrator note — renewal dates, contacts, special handling…"
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save note"}
+            </Button>
+            {i.notes ? (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={saving}
+                onClick={() => {
+                  setValue("");
+                  void save("");
+                }}
+              >
+                Clear note
+              </Button>
+            ) : null}
+            <span className="text-xs text-muted">{value.length}/4000</span>
+          </div>
+        </form>
+      ) : i.notes ? (
+        <pre className="whitespace-pre-wrap break-words rounded-md border border-border bg-raised px-3 py-2 font-mono text-sm text-primary">
+          {i.notes}
+        </pre>
+      ) : (
+        <EmptyState title="No notes" hint="An administrator has not added a note to this VPS." />
+      )}
+    </Card>
+  );
+}
+
+export type TabId = "overview" | "notes" | "console" | "resources" | "network" | "files" | "settings";
 
 export const TABS: { id: TabId; label: string }[] = [
   { id: "overview", label: "Overview" },
+  { id: "notes", label: "Notes" },
   { id: "console", label: "Console" },
   { id: "resources", label: "Resources" },
   { id: "network", label: "Network" },
@@ -1033,6 +1135,7 @@ export function InstanceDetailsPage(): React.JSX.Element {
           <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
             <TabErrorBoundary key={tab}>
             {tab === "overview" && <OverviewTab detail={detail} onRefresh={refresh} />}
+            {tab === "notes" && <NotesTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
             {tab === "console" && <ConsoleTab instanceId={detail.instance.id} />}
             {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
             {tab === "network" && <NetworkTab detail={detail} />}

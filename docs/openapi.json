@@ -3160,6 +3160,202 @@
         }
       }
     },
+    "/api/v1/instances/:id/notes": {
+      "patch": {
+        "operationId": "updateInstanceNotes",
+        "summary": "Set or clear the administrator note on an instance.",
+        "description": "Set or clear the administrator note on a VPS. A single free-text field (Proxmox-style) visible to everyone who can see the instance; only administrators may change it. Sending an empty or whitespace-only value clears the note. The note is metadata only and never affects the host container.",
+        "tags": [
+          "Instances"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "instance": {
+                          "$ref": "#/components/schemas/Instance"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:settings:write",
+        "x-scope-description": "Rename instances and update instance metadata.",
+        "x-admin-role": true,
+        "x-sensitive": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "notes"
+                ],
+                "properties": {
+                  "notes": {
+                    "type": "string",
+                    "maxLength": 4000,
+                    "description": "Note text; empty clears it."
+                  }
+                }
+              },
+              "example": {
+                "notes": "Renewal due 2026-11-01. Contact the customer before suspending."
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/instances/:id/suspend": {
       "post": {
         "operationId": "suspendInstance",
@@ -11756,7 +11952,7 @@
           },
           "schema_version": {
             "type": "integer",
-            "example": 3
+            "example": 4
           },
           "contract": {
             "type": "object",
@@ -11932,6 +12128,11 @@
           "ip_address": {
             "type": "string",
             "nullable": true
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "description": "Administrator note (Proxmox-style), visible to everyone who can see the instance. Editable by administrators only."
           },
           "created_at": {
             "type": "string",

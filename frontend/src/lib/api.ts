@@ -60,6 +60,7 @@ export interface Instance {
   storage_gb: number;
   template: string | null;
   ip_address: string | null;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }
