@@ -51,12 +51,12 @@ v1MetaRouter.get("/capabilities", (_req, res) => {
         operation_log: true,
         async_provisioning: true,
         // Honest limitations of this build:
-        remote_node_agents: false,
+        remote_node_agents: true,
         interactive_console_over_api: false,
         arbitrary_host_commands_over_api: false,
       },
       notes: [
-        "Remote node records are configuration only: no remote agent is implemented, so remote operations report REMOTE_NODE_UNSUPPORTED.",
+        "Remote node agents communicate over authenticated HTTPS and Cloudflare Tunnels to manage LXC containers on remote Linux hosts.",
         "Interactive consoles authenticate with a browser session cookie; /api/v1 exposes only the console preflight check.",
         "Disk quotas are enforced only where the host filesystem supports them (btrfs or ext4 project quotas).",
         "API keys never expose host shell access or stored application secrets.",

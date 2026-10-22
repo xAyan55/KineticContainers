@@ -127,6 +127,13 @@ export interface ConsoleCheck {
 
 /** Preflight: is an interactive console actually available for this instance? */
 export async function checkConsoleRunnable(row: Record<string, unknown>): Promise<ConsoleCheck> {
+  const nodeId = String(row.node_id ?? "local");
+  const containerId = String(row.container_id ?? "");
+  if (nodeId !== "local") {
+    const { getProviderForNode } = await import("./providerRegistry.js");
+    const provider = getProviderForNode(nodeId);
+    return provider.checkConsole(nodeId, containerId, row.template as string | undefined);
+  }
   const pty = loadPty();
   if (!pty) {
     const hint = ptyLoadError ? ` (${ptyLoadError})` : "";
@@ -137,7 +144,6 @@ export async function checkConsoleRunnable(row: Record<string, unknown>): Promis
       reason: `Console access is unsupported: the terminal backend (node-pty) is unavailable on this host${hint}.`,
     };
   }
-  const containerId = String(row.container_id);
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}$/.test(containerId)) {
     return { supported: false, running: false, shell: null, reason: "Container identifier is invalid." };
   }
@@ -222,7 +228,14 @@ function openConsole(ws: WebSocket, req: IncomingMessage, instanceId: string): v
       return;
     }
     const { user, row } = session;
+    const nodeId = String(row.node_id ?? "local");
     const containerId = String(row.container_id);
+    if (nodeId !== "local") {
+      const { getProviderForNode } = await import("./providerRegistry.js");
+      const provider = getProviderForNode(nodeId);
+      provider.openConsole(nodeId, containerId, ws, user, row.template as string | undefined);
+      return;
+    }
     let check: ConsoleCheck;
     try {
       check = await checkConsoleRunnable(row);

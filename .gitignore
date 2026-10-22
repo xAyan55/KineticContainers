@@ -6,3 +6,4 @@ dist/
 frontend/dist/
 server/dist/
 coverage/
+data/

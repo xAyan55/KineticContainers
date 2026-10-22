@@ -5,15 +5,12 @@ import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import { recordAudit } from "../services/audit.js";
 import {
-  getProvider,
-  LocalLxcProvider,
   applyResourceLimits,
   containerExistsOnHost,
   containerRootfsPath,
   enforceBtrfsQuota,
   enforceExt4Quota,
   getContainerMetrics,
-  type ContainerMetrics,
   getContainerNetwork,
   getContainerStorage,
   isBtrfsSubvolume,
@@ -23,9 +20,11 @@ import {
   readEffectiveConfig,
   repairInstance,
   RESOURCE_MODEL,
+  LocalLxcProvider,
 } from "../services/virtualization/localAgent.js";
 import { checkConsoleRunnable } from "../services/virtualization/console.js";
-import { ProviderError } from "../services/virtualization/provider.js";
+import { ProviderError, type ContainerMetrics } from "../services/virtualization/provider.js";
+import { getProviderForNode } from "../services/virtualization/providerRegistry.js";
 
 export const instancesRouter = Router();
 instancesRouter.use(requireAuth);
@@ -159,9 +158,10 @@ async function readLiveState(row: InstanceRow): Promise<LiveState> {
   if (!nodeId || !containerId) {
     return { exists: false, status: null, checkedAt, error: "Instance is not attached to a configured node." };
   }
+  const provider = getProviderForNode(nodeId);
   let exists: boolean;
   try {
-    exists = await containerExistsOnHost(containerId);
+    exists = await provider.containerExists(nodeId, containerId);
   } catch (err) {
     // The inventory itself is unreadable (e.g. no LXC tooling): unknown, not absent.
     const message = err instanceof ProviderError ? err.message : "Live state could not be read.";
@@ -171,7 +171,7 @@ async function readLiveState(row: InstanceRow): Promise<LiveState> {
     return { exists: false, status: null, checkedAt, error: "No matching container exists on the host." };
   }
   try {
-    const state = await readContainerState(containerId);
+    const state = await provider.readContainerState(nodeId, containerId);
     const status = state === "RUNNING" ? "running" : state === "STOPPED" ? "stopped" : state.toLowerCase();
     return { exists: true, status, checkedAt, error: null };
   } catch (err) {
@@ -192,7 +192,8 @@ instancesRouter.get("/:id/live", async (req, res) => {
   let metrics: ContainerMetrics | null = null;
   if (live.exists && live.status === "running") {
     try {
-      metrics = await getContainerMetrics(row.container_id as string);
+      const provider = getProviderForNode(row.node_id as string);
+      metrics = await provider.getContainerMetrics(row.node_id as string, row.container_id as string);
     } catch {
       metrics = null;
     }
@@ -213,7 +214,8 @@ instancesRouter.get("/:id/network", async (req, res) => {
     return;
   }
   try {
-    const network = await getContainerNetwork(row.container_id as string);
+    const provider = getProviderForNode(row.node_id as string);
+    const network = await provider.getContainerNetwork(row.node_id as string, row.container_id as string);
     res.json({ data: { network, checkedAt: new Date().toISOString() } });
   } catch (err) {
     providerError(res, err);
@@ -233,13 +235,14 @@ instancesRouter.get("/:id/config", async (req, res) => {
     return;
   }
   try {
-    const effective = await readEffectiveConfig(row.container_id as string);
-    const storage = await getContainerStorage(row.container_id as string).catch(() => null);
-    const lxcfsActive = await isLxcfsActiveForContainer(row.container_id as string).catch(() => null);
+    const provider = getProviderForNode(row.node_id as string);
+    const effective = await provider.readEffectiveConfig(row.node_id as string, row.container_id as string);
+    const storage = await provider.getContainerStorage(row.node_id as string, row.container_id as string).catch(() => null);
+    const lxcfsActive = effective.lxcfsActive ?? (row.node_id === "local" ? await isLxcfsActiveForContainer(row.container_id as string).catch(() => null) : null);
     res.json({
       data: {
         configured: { cpu: row.cpu, memory_mb: row.memory_mb, storage_gb: row.storage_gb },
-        effective: { ...effective, cpuModel: RESOURCE_MODEL },
+        effective: { ...effective, cpuModel: effective.cpuModel ?? RESOURCE_MODEL },
         storage,
         lxcfs: lxcfsActive === null ? null : { active: lxcfsActive },
       },
@@ -276,52 +279,69 @@ instancesRouter.patch("/:id/resources", validate(resourcesSchema), async (req, r
     forbidden(res);
     return;
   }
+  const provider = getProviderForNode(row.node_id as string);
   const storageGb =
     (req.body.storage_gb as number | undefined) ?? (row.storage_gb as number);
   if (req.body.storage_gb !== undefined && req.body.storage_gb !== row.storage_gb) {
-    // Disk changes are only accepted where a quota can actually be enforced;
-    // otherwise the recorded value would become a lie.
-    try {
-      const storage = await getContainerStorage(row.container_id as string);
-      if (!storage.quotaSupported) {
-        res.status(400).json({
-          error: {
-            code: "STORAGE_IMMUTABLE",
-            message: `Disk quotas cannot be enforced on this backend (${storage.backend}): ${storage.note}`,
-          },
-        });
-        return;
-      }
-      if (storage.backend === "btrfs") {
-        const rootfs = containerRootfsPath(row.container_id as string);
-        if (!(await isBtrfsSubvolume(rootfs))) {
+    if (row.node_id === "local") {
+      try {
+        const storage = await getContainerStorage(row.container_id as string);
+        if (!storage.quotaSupported) {
           res.status(400).json({
-            error: { code: "STORAGE_IMMUTABLE", message: "btrfs quota needs a subvolume layout; this rootfs is a plain directory." },
+            error: {
+              code: "STORAGE_IMMUTABLE",
+              message: `Disk quotas cannot be enforced on this backend (${storage.backend}): ${storage.note}`,
+            },
           });
           return;
         }
-        await enforceBtrfsQuota(rootfs, storageGb);
-      } else if (storage.backend === "ext4") {
-        await enforceExt4Quota(
-          containerRootfsPath(row.container_id as string),
-          row.container_id as string,
-          storageGb
-        );
-      } else {
-        res.status(400).json({
-          error: { code: "STORAGE_IMMUTABLE", message: `Disk quotas cannot be enforced on backend '${storage.backend}'.` },
-        });
+        if (storage.backend === "btrfs") {
+          const rootfs = containerRootfsPath(row.container_id as string);
+          if (!(await isBtrfsSubvolume(rootfs))) {
+            res.status(400).json({
+              error: { code: "STORAGE_IMMUTABLE", message: "btrfs quota needs a subvolume layout; this rootfs is a plain directory." },
+            });
+            return;
+          }
+          await enforceBtrfsQuota(rootfs, storageGb);
+        } else if (storage.backend === "ext4") {
+          await enforceExt4Quota(
+            containerRootfsPath(row.container_id as string),
+            row.container_id as string,
+            storageGb
+          );
+        } else {
+          res.status(400).json({
+            error: { code: "STORAGE_IMMUTABLE", message: `Disk quotas cannot be enforced on backend '${storage.backend}'.` },
+          });
+          return;
+        }
+      } catch (err) {
+        providerError(res, err);
         return;
       }
-    } catch (err) {
-      providerError(res, err);
-      return;
+    } else {
+      try {
+        const storage = await provider.getContainerStorage(row.node_id as string, row.container_id as string);
+        if (!storage.quotaSupported) {
+          res.status(400).json({
+            error: {
+              code: "STORAGE_IMMUTABLE",
+              message: `Disk quotas cannot be enforced on this backend (${storage.backend}): ${storage.note ?? ""}`,
+            },
+          });
+          return;
+        }
+      } catch (err) {
+        providerError(res, err);
+        return;
+      }
     }
   }
   const cpu = (req.body.cpu as number | undefined) ?? (row.cpu as number);
   const memoryMb = (req.body.memory_mb as number | undefined) ?? (row.memory_mb as number);
   try {
-    const result = await applyResourceLimits(row.container_id as string, { cpu, memoryMb });
+    const result = await provider.applyResourceLimits(row.node_id as string, row.container_id as string, { cpu, memoryMb, storageGb });
     db.prepare("UPDATE instances SET cpu = ?, memory_mb = ?, storage_gb = ?, updated_at = ? WHERE id = ?").run(
       cpu,
       memoryMb,
@@ -329,20 +349,23 @@ instancesRouter.patch("/:id/resources", validate(resourcesSchema), async (req, r
       nowIso(),
       row.id as string
     );
+    const liveApplied = "liveApplied" in result ? result.liveApplied : true;
+    const restartRequired = "restartRequired" in result ? result.restartRequired : false;
+    const cgroupVersion = "cgroupVersion" in result ? result.cgroupVersion : "v2";
     recordAudit(db, {
       actorId: req.user!.id,
       action: "instance.resources_update",
       targetType: "instance",
       targetId: row.id as string,
-      detail: { cpu, memory_mb: memoryMb, storage_gb: storageGb, liveApplied: result.liveApplied },
+      detail: { cpu, memory_mb: memoryMb, storage_gb: storageGb, liveApplied },
     });
-    const effective = await readEffectiveConfig(row.container_id as string).catch(() => null);
+    const effective = await provider.readEffectiveConfig(row.node_id as string, row.container_id as string).catch(() => null);
     res.json({
       data: {
         instance: toPublic({ ...row, cpu, memory_mb: memoryMb, storage_gb: storageGb }),
-        liveApplied: result.liveApplied,
-        restartRequired: result.restartRequired,
-        cgroupVersion: result.cgroupVersion,
+        liveApplied,
+        restartRequired,
+        cgroupVersion,
         effective,
       },
     });
@@ -431,14 +454,14 @@ async function destroyInstance(
   const containerId = row.container_id as string | null;
   let removedHostContainer = false;
   if (nodeId && containerId) {
-    const provider = getProvider();
+    const provider = getProviderForNode(nodeId);
     if (!provider.capabilities.remove) {
       throw new ProviderError("UNSUPPORTED", "This operation is not supported by the current integration.", 409);
     }
-    const existedBefore = await containerExistsOnHost(containerId).catch(() => true);
+    const existedBefore = await provider.containerExists(nodeId, containerId).catch(() => true);
     await provider.deleteContainer(nodeId, containerId);
     removedHostContainer = existedBefore;
-    const stillThere = await containerExistsOnHost(containerId).catch(() => false);
+    const stillThere = await provider.containerExists(nodeId, containerId).catch(() => false);
     if (stillThere) {
       throw new ProviderError("DESTROY_FAILED", "Container destroy ran but the container still exists.");
     }
@@ -497,7 +520,8 @@ instancesRouter.get("/:id/repair", async (req, res) => {
     return;
   }
   try {
-    const plan = await planInstanceRepair(row.container_id as string, {
+    const provider = getProviderForNode(row.node_id as string);
+    const plan = await provider.planRepair(row.node_id as string, row.container_id as string, {
       cpu: Number(row.cpu),
       memoryMb: Number(row.memory_mb),
       storageGb: Number(row.storage_gb),
@@ -530,7 +554,8 @@ instancesRouter.post("/:id/repair", async (req, res) => {
     return;
   }
   try {
-    const report = await repairInstance(row.container_id as string, {
+    const provider = getProviderForNode(row.node_id as string);
+    const report = await provider.applyRepair(row.node_id as string, row.container_id as string, {
       cpu: Number(row.cpu),
       memoryMb: Number(row.memory_mb),
       storageGb: Number(row.storage_gb),
@@ -561,7 +586,8 @@ instancesRouter.get("/:id/console", async (req, res) => {
     return;
   }
   try {
-    const preflight = await checkConsoleRunnable(row);
+    const provider = getProviderForNode(row.node_id as string);
+    const preflight = await provider.checkConsole(row.node_id as string, row.container_id as string, row.template as string | undefined);
     res.json({ data: preflight });
   } catch (err) {
     providerError(res, err);
@@ -611,7 +637,7 @@ instancesRouter.post("/:id/actions", async (req, res) => {
     });
     return;
   }
-  const provider = getProvider();
+  const provider = getProviderForNode(String(row.node_id));
   const action = parsed.data.action;
   const previousStatus = String(row.status);
   try {
@@ -688,7 +714,7 @@ instancesRouter.post("/:id/suspend", async (req, res) => {
   try {
     const live = await readLiveState(row);
     if (live.exists && live.status === "running") {
-      const provider = getProvider();
+      const provider = getProviderForNode(String(row.node_id));
       if (!provider.capabilities.stop) {
         res.status(409).json({
           error: { code: "UNSUPPORTED", message: "This operation is not supported by the current integration." },

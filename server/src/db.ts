@@ -195,6 +195,25 @@ const MIGRATIONS: Migration[] = [
       if (!cols.has("notes")) db.exec("ALTER TABLE instances ADD COLUMN notes TEXT");
     },
   },
+  {
+    // Remote node authentication, TLS settings, and Cloudflare Access headers.
+    version: 5,
+    run: (db: Database.Database) => {
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(nodes)").all() as { name: string }[]).map((r) => r.name)
+      );
+      const addColumn = (ddl: string, name: string): void => {
+        if (!cols.has(name)) db.exec(`ALTER TABLE nodes ADD COLUMN ${ddl}`);
+      };
+      addColumn("auth_credential TEXT", "auth_credential");
+      addColumn("tls_skip_verify INTEGER NOT NULL DEFAULT 0", "tls_skip_verify");
+      addColumn("cf_client_id TEXT", "cf_client_id");
+      addColumn("cf_client_secret TEXT", "cf_client_secret");
+      addColumn("agent_version TEXT", "agent_version");
+      addColumn("enrollment_token TEXT", "enrollment_token");
+      addColumn("enrolled_at TEXT", "enrolled_at");
+    },
+  },
 ];
 
 const DEFAULT_SETTINGS: Record<string, string> = {

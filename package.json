@@ -6,7 +6,8 @@
   "license": "MIT",
   "workspaces": [
     "frontend",
-    "server"
+    "server",
+    "agent"
   ],
   "scripts": {
     "install:all": "npm install --workspaces",

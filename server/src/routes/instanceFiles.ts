@@ -5,7 +5,8 @@ import { getDb } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validate, validateQuery } from "../middleware/validate.js";
 import { recordAudit } from "../services/audit.js";
-import { ProviderError } from "../services/virtualization/provider.js";
+import { ProviderError, type VirtualizationProvider } from "../services/virtualization/provider.js";
+import { getProviderForNode } from "../services/virtualization/providerRegistry.js";
 import { containerRootfsPath } from "../services/virtualization/localAgent.js";
 import {
   FileServiceError,
@@ -41,6 +42,10 @@ instanceFilesRouter.use(requireAuth);
 interface FileContext {
   row: InstanceRow;
   root: string;
+  provider: VirtualizationProvider;
+  isRemote: boolean;
+  nodeId: string;
+  containerId: string;
 }
 
 function filesError(res: Response, err: unknown): void {
@@ -57,7 +62,7 @@ function filesError(res: Response, err: unknown): void {
   res.status(500).json({ error: { code: "FILESYSTEM_ERROR", message: "Filesystem operation failed." } });
 }
 
-/** Ownership + local-node + rootfs presence, in that order. */
+/** Ownership + local/remote-node + rootfs presence, in that order. */
 function fileContext(req: Request): FileContext {
   const db = getDb();
   const row = getManagedInstance(db, req.params.id, req.user!);
@@ -69,15 +74,22 @@ function fileContext(req: Request): FileContext {
   if (!nodeId || !containerId) {
     throw new FileServiceError("NO_NODE", "Instance is not attached to a configured node.", 409);
   }
-  const node = db.prepare("SELECT endpoint FROM nodes WHERE id = ?").get(nodeId) as
-    | { endpoint: string }
+  const node = db.prepare("SELECT endpoint, status FROM nodes WHERE id = ?").get(nodeId) as
+    | { endpoint: string; status: string }
     | undefined;
-  if (!node || node.endpoint !== "local") {
-    throw new FileServiceError(
-      "REMOTE_NODE_UNSUPPORTED",
-      "Only the local host agent is implemented; remote nodes are not connected.",
-      409
-    );
+  if (!node) {
+    throw new FileServiceError("NO_NODE", "Virtualization node is not registered.", 409);
+  }
+  const provider = getProviderForNode(nodeId);
+  if (node.endpoint !== "local") {
+    if (provider.kind === "unconfigured" || node.status === "unconfigured") {
+      throw new FileServiceError(
+        "REMOTE_NODE_UNSUPPORTED",
+        "Only the local host agent is implemented; remote nodes are not connected.",
+        409
+      );
+    }
+    return { row, root: "", provider, isRemote: true, nodeId, containerId };
   }
   let root: string;
   try {
@@ -94,7 +106,7 @@ function fileContext(req: Request): FileContext {
     // A missing or unreadable rootfs is an honest 404, never a generic error.
     throw new FileServiceError("FILESYSTEM_NOT_FOUND", "Container filesystem is not available on this host.", 404);
   }
-  return { row, root };
+  return { row, root, provider, isRemote: false, nodeId, containerId };
 }
 
 function auditFiles(req: Request, row: InstanceRow, op: string, detail: Record<string, unknown>): void {
@@ -121,7 +133,7 @@ const listQuery = z.object({
 /** Browse one directory with metadata, search, sorting, and pagination. */
 instanceFilesRouter.get("/:id/files", validateQuery(listQuery), async (req, res) => {
   try {
-    const { root } = fileContext(req);
+    const ctx = fileContext(req);
     const q = (req.validatedQuery ?? {}) as {
       path?: string;
       limit?: number;
@@ -130,13 +142,15 @@ instanceFilesRouter.get("/:id/files", validateQuery(listQuery), async (req, res)
       order?: "asc" | "desc";
       q?: string;
     };
-    const result = await listDirectory(root, q.path ?? "/", {
-      limit: q.limit,
-      offset: q.offset,
-      sort: q.sort,
-      order: q.order,
-      q: q.q,
-    });
+    const result = ctx.isRemote
+      ? await ctx.provider.listFiles(ctx.nodeId, ctx.containerId, q.path ?? "/", q)
+      : await listDirectory(ctx.root, q.path ?? "/", {
+          limit: q.limit,
+          offset: q.offset,
+          sort: q.sort,
+          order: q.order,
+          q: q.q,
+        });
     res.json({ data: result });
   } catch (err) {
     filesError(res, err);
@@ -146,9 +160,11 @@ instanceFilesRouter.get("/:id/files", validateQuery(listQuery), async (req, res)
 /** Read a text file for the editor. Binary and oversized files are refused. */
 instanceFilesRouter.get("/:id/files/content", validateQuery(pathQuery), async (req, res) => {
   try {
-    const { root } = fileContext(req);
+    const ctx = fileContext(req);
     const q = (req.validatedQuery ?? {}) as { path: string };
-    const result = await readTextFile(root, q.path);
+    const result = ctx.isRemote
+      ? await ctx.provider.readFile(ctx.nodeId, ctx.containerId, q.path)
+      : await readTextFile(ctx.root, q.path);
     res.json({ data: result });
   } catch (err) {
     filesError(res, err);
@@ -164,9 +180,11 @@ const writeSchema = z.object({
 /** Save editor content with optimistic concurrency and atomic replacement. */
 instanceFilesRouter.put("/:id/files/content", validate(writeSchema), async (req, res) => {
   try {
-    const { row, root } = fileContext(req);
-    const result = await writeTextFile(root, req.body.path, req.body.content, req.body.expected_mtime);
-    auditFiles(req, row, "write", { path: result.path, size: result.size });
+    const ctx = fileContext(req);
+    const result = ctx.isRemote
+      ? await ctx.provider.writeFile(ctx.nodeId, ctx.containerId, req.body.path, req.body.content, req.body.expected_mtime)
+      : await writeTextFile(ctx.root, req.body.path, req.body.content, req.body.expected_mtime);
+    auditFiles(req, ctx.row, "write", { path: result.path, size: result.size });
     res.json({ data: result });
   } catch (err) {
     filesError(res, err);
@@ -181,9 +199,12 @@ const createSchema = z.object({
 /** Create an empty file or a directory. */
 instanceFilesRouter.post("/:id/files", validate(createSchema), async (req, res) => {
   try {
-    const { row, root } = fileContext(req);
-    const result = await createEntry(root, req.body.path, req.body.type);
-    auditFiles(req, row, "create", { path: result.entry.path, type: req.body.type });
+    const ctx = fileContext(req);
+    const result = ctx.isRemote
+      ? await ctx.provider.createFileEntry(ctx.nodeId, ctx.containerId, req.body.path, req.body.type)
+      : await createEntry(ctx.root, req.body.path, req.body.type);
+    const createdPath = "entry" in result && result.entry ? result.entry.path : req.body.path;
+    auditFiles(req, ctx.row, "create", { path: createdPath, type: req.body.type });
     res.status(201).json({ data: result });
   } catch (err) {
     filesError(res, err);
@@ -206,11 +227,14 @@ const uploadSchema = z.object({
 instanceFilesRouter.post("/:id/files/upload", validate(uploadSchema), async (req, res) => {
   req.setTimeout(120_000);
   try {
-    const { row, root } = fileContext(req);
-    const result = await uploadFiles(root, req.body.path, req.body.files, req.body.overwrite);
-    auditFiles(req, row, "upload", {
+    const ctx = fileContext(req);
+    const result = ctx.isRemote
+      ? await ctx.provider.uploadFiles(ctx.nodeId, ctx.containerId, req.body.path, req.body.files, req.body.overwrite)
+      : await uploadFiles(ctx.root, req.body.path, req.body.files, req.body.overwrite);
+    const filesList = "files" in result && Array.isArray(result.files) ? result.files : [];
+    auditFiles(req, ctx.row, "upload", {
       path: result.path,
-      files: result.files.map((f) => ({ name: f.name, size: f.size, overwritten: f.overwritten })),
+      files: filesList.map((f: any) => ({ name: f.name, size: f.size, overwritten: f.overwritten })),
     });
     res.status(201).json({ data: result });
   } catch (err) {
@@ -221,9 +245,24 @@ instanceFilesRouter.post("/:id/files/upload", validate(uploadSchema), async (req
 /** Stream a regular file back as an attachment. */
 instanceFilesRouter.get("/:id/files/download", validateQuery(pathQuery), async (req, res) => {
   try {
-    const { root } = fileContext(req);
+    const ctx = fileContext(req);
     const q = (req.validatedQuery ?? {}) as { path: string };
-    const target = await resolveDownload(root, q.path);
+    if (ctx.isRemote) {
+      const target = await ctx.provider.downloadFile(ctx.nodeId, ctx.containerId, q.path);
+      res.setHeader("Content-Type", "application/octet-stream");
+      if (target.size) res.setHeader("Content-Length", String(target.size));
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${target.filename}"; filename*=UTF-8''${encodeURIComponent(target.filename)}`
+      );
+      target.stream.on("error", () => {
+        if (!res.headersSent) res.status(500).json({ error: { code: "FILESYSTEM_ERROR", message: "Download failed." } });
+        else res.destroy();
+      });
+      target.stream.pipe(res);
+      return;
+    }
+    const target = await resolveDownload(ctx.root, q.path);
     res.setHeader("Content-Type", "application/octet-stream");
     res.setHeader("Content-Length", String(target.size));
     res.setHeader(
@@ -249,9 +288,11 @@ const moveSchema = z.object({
 /** Rename or move a file or directory. The destination must not exist. */
 instanceFilesRouter.patch("/:id/files/move", validate(moveSchema), async (req, res) => {
   try {
-    const { row, root } = fileContext(req);
-    const result = await moveEntry(root, req.body.from, req.body.to);
-    auditFiles(req, row, "move", { from: result.from, to: result.to });
+    const ctx = fileContext(req);
+    const result = ctx.isRemote
+      ? await ctx.provider.moveFileEntry(ctx.nodeId, ctx.containerId, req.body.from, req.body.to)
+      : await moveEntry(ctx.root, req.body.from, req.body.to);
+    auditFiles(req, ctx.row, "move", { from: result.from, to: result.to });
     res.json({ data: result });
   } catch (err) {
     filesError(res, err);
@@ -265,9 +306,11 @@ const deleteSchema = z.object({
 /** Delete files and directories (recursive, confined to the container). */
 instanceFilesRouter.delete("/:id/files", validate(deleteSchema), async (req, res) => {
   try {
-    const { row, root } = fileContext(req);
-    const result = await deleteEntries(root, req.body.paths);
-    auditFiles(req, row, "delete", { paths: result.deleted });
+    const ctx = fileContext(req);
+    const result = ctx.isRemote
+      ? await ctx.provider.deleteFileEntries(ctx.nodeId, ctx.containerId, req.body.paths)
+      : await deleteEntries(ctx.root, req.body.paths);
+    auditFiles(req, ctx.row, "delete", { paths: result.deleted });
     res.json({ data: result });
   } catch (err) {
     filesError(res, err);

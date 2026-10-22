@@ -4,7 +4,7 @@ import { getDb, nowIso } from "../../db.js";
 import { requireAdmin, requireAuth } from "../../middleware/auth.js";
 import { validate, validateQuery } from "../../middleware/validate.js";
 import { recordAudit } from "../../services/audit.js";
-import { getProvider } from "../../services/virtualization/localAgent.js";
+import { getProviderForNode } from "../../services/virtualization/providerRegistry.js";
 import { ProviderError } from "../../services/virtualization/provider.js";
 import { reconcileStoredStatus, toPublic } from "../instances.js";
 
@@ -104,7 +104,7 @@ async function readLiveForRows(rows: JoinedRow[]): Promise<Map<string, LiveState
     let inventory: Map<string, string> | null = null;
     let failure: string | null = null;
     try {
-      const containers = await getProvider().listContainers(nodeId);
+      const containers = await getProviderForNode(nodeId).listContainers(nodeId);
       inventory = new Map(containers.map((c) => [c.containerId, c.status]));
     } catch (err) {
       failure = err instanceof ProviderError ? err.message : "Host inventory could not be read.";

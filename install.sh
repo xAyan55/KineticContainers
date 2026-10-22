@@ -24,6 +24,8 @@
 #                         .env, users, settings, ports, or service config.
 #       --probe           Run a full create/start/stop/destroy probe container
 #                         during verification (default in --setup-lxc-only).
+#       --agent, --node-agent Only install the standalone KineticCT Remote Node
+#                         Agent on this host. Does not install the web panel.
 #       --start           Start the server in the foreground when finished.
 #       --dir DIR         Install directory when cloning (default: $HOME/KineticContainers).
 #       --branch NAME     Git branch to clone (default: main).
@@ -87,6 +89,15 @@ while [ $# -gt 0 ]; do
     --dir=*) INSTALL_DIR="${1#--dir=}"; shift ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --branch=*) BRANCH="${1#--branch=}"; shift ;;
+    --agent|--node-agent)
+      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      if [ -f "$SCRIPT_DIR/agent/install-agent.sh" ]; then
+        shift
+        exec bash "$SCRIPT_DIR/agent/install-agent.sh" "$@"
+      else
+        die "agent/install-agent.sh not found."
+      fi
+      ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1 (see --help)" ;;
   esac
@@ -1099,6 +1110,25 @@ CORS_ORIGINS=$CORS_ORIGINS
 LOGIN_RATE_LIMIT_MAX=$LOGIN_RATE_LIMIT_MAX
 EOF
 chmod 600 "$ENV_FILE"
+
+# ---------------------------------------------------------------------------
+# master encryption key (AES-256-GCM)
+# ---------------------------------------------------------------------------
+DATA_DIR="$REPO_ROOT/data"
+mkdir -p "$DATA_DIR"
+KEY_FILE="$DATA_DIR/encryption.key"
+if [ ! -f "$KEY_FILE" ]; then
+  say "Generating master encryption key ($KEY_FILE) ..."
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32 > "$KEY_FILE"
+  elif command -v node >/dev/null 2>&1; then
+    node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))" > "$KEY_FILE"
+  fi
+  chmod 600 "$KEY_FILE" 2>/dev/null || true
+else
+  info "Preserving existing master encryption key ($KEY_FILE)."
+  chmod 600 "$KEY_FILE" 2>/dev/null || true
+fi
 
 # ---------------------------------------------------------------------------
 # install + build

@@ -3,9 +3,36 @@ import type {
   CreateContainerRequest,
   NodeStatus,
   VirtualizationProvider,
+  ProviderCapabilities,
+  NodeHealthResult,
+  ConsoleCheck,
+  ListFilesOptions,
+  ListFilesResult,
+  ReadFileResult,
+  WriteFileResult,
+  DeleteFilesResult,
+  UploadFileItem,
+  DownloadFileResult,
+  UploadFilesResult,
+  FileEntryItem,
+  ApplyLimitsResult,
+  ContainerStorageInfo,
 } from "./provider.js";
 import { ProviderError } from "./provider.js";
-import { parseLxcLs, runHostTool, runLxc, runQuotaTool } from "./host.js";
+import { parseLxcLs, runHostTool, runLxc, runQuotaTool, checkNodeHealth } from "./host.js";
+import { checkConsoleRunnable } from "./console.js";
+import {
+  listDirectory,
+  readTextFile,
+  writeTextFile,
+  createEntry,
+  moveEntry,
+  deleteEntries,
+  uploadFiles,
+  resolveDownload,
+} from "./containerFiles.js";
+import type { WebSocket } from "ws";
+import type { AuthUser } from "../../middleware/auth.js";
 import { getDb } from "../../db.js";
 import os from "node:os";
 import fs from "node:fs";
@@ -1691,7 +1718,18 @@ export async function repairLocalInstances(
  */
 export class LocalLxcProvider implements VirtualizationProvider {
   readonly kind = "local-lxc";
-  readonly capabilities = { create: true, start: true, stop: true, remove: true, liveStatus: true };
+  readonly capabilities: ProviderCapabilities = {
+    create: true,
+    start: true,
+    stop: true,
+    remove: true,
+    liveStatus: true,
+    files: true,
+    console: true,
+    metrics: true,
+    repair: true,
+    storageLimits: true,
+  };
 
   private requireLocalNode(nodeId: string): void {
     const db = getDb();
@@ -1729,6 +1767,21 @@ export class LocalLxcProvider implements VirtualizationProvider {
       if (err instanceof ProviderError) throw err;
       throw new ProviderError("NODE_UNREACHABLE", "Host agent did not respond.");
     }
+  }
+
+  async getNodeHealth(nodeId: string): Promise<NodeHealthResult> {
+    this.requireLocalNode(nodeId);
+    return checkNodeHealth(getDb(), nodeId) as unknown as NodeHealthResult;
+  }
+
+  async getHostCapacity(nodeId: string): Promise<HostCapacity> {
+    this.requireLocalNode(nodeId);
+    return getHostCapacity();
+  }
+
+  async getSupportedTemplates(nodeId: string): Promise<string[]> {
+    this.requireLocalNode(nodeId);
+    return LocalLxcProvider.supportedTemplates();
   }
 
   async listContainers(nodeId: string): Promise<ContainerInfo[]> {
@@ -1854,34 +1907,248 @@ export class LocalLxcProvider implements VirtualizationProvider {
       throw new ProviderError("DESTROY_FAILED", "Container destroy ran but the container still exists.");
     }
   }
+
+  async containerExists(nodeId: string, containerId: string): Promise<boolean> {
+    this.requireLocalNode(nodeId);
+    return containerExistsOnHost(containerId);
+  }
+
+  async readContainerState(nodeId: string, containerId: string): Promise<string> {
+    this.requireLocalNode(nodeId);
+    return readContainerState(containerId);
+  }
+
+  async getContainerNetwork(nodeId: string, containerId: string): Promise<ContainerNetworkInfo> {
+    this.requireLocalNode(nodeId);
+    return getContainerNetwork(containerId);
+  }
+
+  async getContainerMetrics(nodeId: string, containerId: string): Promise<ContainerMetrics> {
+    this.requireLocalNode(nodeId);
+    return getContainerMetrics(containerId);
+  }
+
+  async getContainerStorage(nodeId: string, containerId: string): Promise<ContainerStorageInfo> {
+    this.requireLocalNode(nodeId);
+    return getContainerStorage(containerId);
+  }
+
+  async readEffectiveConfig(nodeId: string, containerId: string): Promise<EffectiveConfig> {
+    this.requireLocalNode(nodeId);
+    return readEffectiveConfig(containerId);
+  }
+
+  async applyResourceLimits(nodeId: string, containerId: string, limits: ResourceLimits): Promise<ApplyLimitsResult> {
+    this.requireLocalNode(nodeId);
+    if (!limits.cpu || !limits.memoryMb) {
+      throw new ProviderError("INVALID_RESOURCES", "CPU and memory limits are required.", 400);
+    }
+    return applyResourceLimits(containerId, { cpu: limits.cpu, memoryMb: limits.memoryMb });
+  }
+
+  async planRepair(nodeId: string, containerId: string, target: { cpu: number; memoryMb: number; storageGb: number }): Promise<RepairPlan> {
+    this.requireLocalNode(nodeId);
+    return planInstanceRepair(containerId, target);
+  }
+
+  async applyRepair(nodeId: string, containerId: string, target: { cpu: number; memoryMb: number; storageGb: number }): Promise<RepairReport> {
+    this.requireLocalNode(nodeId);
+    return repairInstance(containerId, target);
+  }
+
+  async checkConsole(nodeId: string, containerId: string, template?: string): Promise<ConsoleCheck> {
+    this.requireLocalNode(nodeId);
+    return checkConsoleRunnable({ container_id: containerId, template });
+  }
+
+  openConsole(nodeId: string, containerId: string, clientWs: WebSocket, user: AuthUser, template?: string): void {
+    this.requireLocalNode(nodeId);
+    // Local console is managed through local pty in console.ts
+  }
+
+  async listFiles(nodeId: string, containerId: string, userPath: string, opts?: ListFilesOptions): Promise<ListFilesResult> {
+    this.requireLocalNode(nodeId);
+    const root = containerRootfsPath(containerId);
+    const res = await listDirectory(root, userPath, opts);
+    return {
+      path: res.path,
+      entries: res.entries.map((e) => ({
+        name: e.name,
+        path: e.path,
+        type: e.type,
+        size: e.size,
+        children: e.children,
+        mode: e.mode,
+        mtime: e.mtime,
+        target: e.target,
+      })),
+      pagination: res.pagination,
+    };
+  }
+
+  async readFile(nodeId: string, containerId: string, userPath: string): Promise<ReadFileResult> {
+    this.requireLocalNode(nodeId);
+    const root = containerRootfsPath(containerId);
+    return readTextFile(root, userPath);
+  }
+
+  async writeFile(nodeId: string, containerId: string, userPath: string, content: string, expectedHash?: string): Promise<WriteFileResult> {
+    this.requireLocalNode(nodeId);
+    const root = containerRootfsPath(containerId);
+    return writeTextFile(root, userPath, content, expectedHash);
+  }
+
+  async createFileEntry(nodeId: string, containerId: string, userPath: string, type: "file" | "dir"): Promise<{ entry: FileEntryItem }> {
+    this.requireLocalNode(nodeId);
+    const root = containerRootfsPath(containerId);
+    const res = await createEntry(root, userPath, type);
+    return {
+      entry: {
+        name: res.entry.name,
+        path: res.entry.path,
+        type: res.entry.type,
+        size: res.entry.size,
+        children: res.entry.children,
+        mode: res.entry.mode,
+        mtime: res.entry.mtime,
+        target: res.entry.target,
+      },
+    };
+  }
+
+  async moveFileEntry(nodeId: string, containerId: string, srcPath: string, dstPath: string): Promise<{ from: string; to: string }> {
+    this.requireLocalNode(nodeId);
+    const root = containerRootfsPath(containerId);
+    return moveEntry(root, srcPath, dstPath);
+  }
+
+  async deleteFileEntries(nodeId: string, containerId: string, paths: string[]): Promise<DeleteFilesResult> {
+    this.requireLocalNode(nodeId);
+    const root = containerRootfsPath(containerId);
+    return deleteEntries(root, paths);
+  }
+
+  async uploadFiles(nodeId: string, containerId: string, dirPath: string, files: unknown, defaultOverwrite?: boolean): Promise<UploadFilesResult> {
+    this.requireLocalNode(nodeId);
+    const root = containerRootfsPath(containerId);
+    return uploadFiles(root, dirPath, files, defaultOverwrite);
+  }
+
+  async downloadFile(nodeId: string, containerId: string, userPath: string): Promise<DownloadFileResult> {
+    this.requireLocalNode(nodeId);
+    const root = containerRootfsPath(containerId);
+    const res = await resolveDownload(root, userPath);
+    return {
+      stream: fs.createReadStream(res.abs),
+      filename: res.filename,
+      size: res.size,
+    };
+  }
 }
 
 /** Returned when no node is registered yet — honest "not configured" state. */
 export class UnconfiguredProvider implements VirtualizationProvider {
   readonly kind = "unconfigured";
-  readonly capabilities = { create: false, start: false, stop: false, remove: false, liveStatus: false };
+  readonly capabilities: ProviderCapabilities = {
+    create: false,
+    start: false,
+    stop: false,
+    remove: false,
+    liveStatus: false,
+    files: false,
+    console: false,
+    metrics: false,
+    repair: false,
+    storageLimits: false,
+  };
   private err(): ProviderError {
     return new ProviderError("INFRA_UNCONFIGURED", "No virtualization node is configured.", 409);
   }
-  getNodeStatus(): Promise<NodeStatus> {
+  async getNodeStatus(): Promise<NodeStatus> {
     throw this.err();
   }
-  listContainers(): Promise<ContainerInfo[]> {
+  async getNodeHealth(): Promise<NodeHealthResult> {
     throw this.err();
   }
-  getContainer(): Promise<ContainerInfo> {
+  async listContainers(): Promise<ContainerInfo[]> {
     throw this.err();
   }
-  createContainer(): Promise<ContainerInfo> {
+  async getContainer(): Promise<ContainerInfo> {
     throw this.err();
   }
-  startContainer(): Promise<void> {
+  async getHostCapacity(): Promise<HostCapacity> {
     throw this.err();
   }
-  stopContainer(): Promise<void> {
+  async getSupportedTemplates(): Promise<string[]> {
     throw this.err();
   }
-  deleteContainer(): Promise<void> {
+  async createContainer(): Promise<ContainerInfo> {
+    throw this.err();
+  }
+  async startContainer(): Promise<void> {
+    throw this.err();
+  }
+  async stopContainer(): Promise<void> {
+    throw this.err();
+  }
+  async deleteContainer(): Promise<void> {
+    throw this.err();
+  }
+  async containerExists(): Promise<boolean> {
+    throw this.err();
+  }
+  async readContainerState(): Promise<string> {
+    throw this.err();
+  }
+  async getContainerNetwork(): Promise<ContainerNetworkInfo> {
+    throw this.err();
+  }
+  async getContainerMetrics(): Promise<ContainerMetrics> {
+    throw this.err();
+  }
+  async getContainerStorage(): Promise<ContainerStorageInfo> {
+    throw this.err();
+  }
+  async readEffectiveConfig(): Promise<EffectiveConfig> {
+    throw this.err();
+  }
+  async applyResourceLimits(): Promise<ApplyLimitsResult | EffectiveConfig> {
+    throw this.err();
+  }
+  async planRepair(): Promise<RepairPlan> {
+    throw this.err();
+  }
+  async applyRepair(): Promise<RepairReport> {
+    throw this.err();
+  }
+  async checkConsole(): Promise<ConsoleCheck> {
+    throw this.err();
+  }
+  openConsole(): void {
+    throw this.err();
+  }
+  async listFiles(): Promise<ListFilesResult> {
+    throw this.err();
+  }
+  async readFile(): Promise<ReadFileResult> {
+    throw this.err();
+  }
+  async writeFile(): Promise<WriteFileResult> {
+    throw this.err();
+  }
+  async createFileEntry(): Promise<{ entry: FileEntryItem }> {
+    throw this.err();
+  }
+  async moveFileEntry(): Promise<{ from: string; to: string }> {
+    throw this.err();
+  }
+  async deleteFileEntries(): Promise<DeleteFilesResult> {
+    throw this.err();
+  }
+  async uploadFiles(): Promise<UploadFilesResult> {
+    throw this.err();
+  }
+  async downloadFile(): Promise<DownloadFileResult> {
     throw this.err();
   }
 }

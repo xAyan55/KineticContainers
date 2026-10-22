@@ -208,8 +208,8 @@ Browse and manage files inside a container's filesystem. Every path is
 container-absolute (`/etc/hostname`), resolved inside the container rootfs;
 traversal (`..`, encoded variants) and symlink escapes are rejected, writes are
 atomic, and mutating calls are audited as `instance.files`. Works whether the
-container is running or stopped, as long as its filesystem is present on the
-local host (remote nodes answer `409 REMOTE_NODE_UNSUPPORTED`).
+container is running or stopped, on both local hosts and remote nodes connected
+via the KineticCT remote node agent.
 
 | Method | Path | Scope | Notes |
 | --- | --- | --- | --- |
@@ -249,14 +249,15 @@ host failures return `502` with a provider code (`409` for a conflicting reserva
 
 | Method | Path | Scope | Notes |
 | --- | --- | --- | --- |
-| GET | `/nodes` | `nodes:read` | Tokens are never returned. |
-| POST | `/nodes` | `nodes:create` | Register `local` or `remote`. |
-| GET | `/nodes/:id` | `nodes:read` | Includes `managed_containers`. |
-| PATCH | `/nodes/:id` | `nodes:update` | Display name only; identity is immutable. |
-| DELETE | `/nodes/:id` | `nodes:delete` | `403 NODE_PROTECTED` for the Local Node; `409 NODE_IN_USE`. |
-| POST | `/nodes/:id/check` | `nodes:health:check` | Real health check; remote → `409 REMOTE_NODE_UNSUPPORTED`. |
-| POST | `/nodes/:id/test` | `nodes:health:check` | Connectivity test; `502 NODE_UNREACHABLE`. |
-| GET | `/nodes/:id/containers` | `nodes:containers:read` | Managed + unmanaged containers. |
+| GET | `/nodes` | `nodes:read` | List nodes. Sensitive credentials and secrets are always redacted. |
+| POST | `/nodes` | `nodes:create` | Register `local` or `remote`. Generates and returns a dedicated node credential for remote nodes. |
+| GET | `/nodes/:id` | `nodes:read` | Node record including managed container count, agent version, and TLS settings. |
+| PATCH | `/nodes/:id` | `nodes:update` | Update display name, `tls_skip_verify`, and Cloudflare Access service credentials. |
+| DELETE | `/nodes/:id` | `nodes:delete` | `403 NODE_PROTECTED` for the Local Node; `409 NODE_IN_USE` when instances exist. |
+| POST | `/nodes/:id/check` | `nodes:health:check` | Run a live health check querying the local provider or remote node agent. |
+| POST | `/nodes/:id/test` | `nodes:health:check` | Connectivity test against the node endpoint; returns `502 NODE_UNREACHABLE` on failure. |
+| POST | `/nodes/:id/rotate-credential` | `nodes:update` | Rotate node credential; generates a new secret and invalidates the previous one. |
+| GET | `/nodes/:id/containers` | `nodes:containers:read` | Managed + unmanaged containers on the host. |
 
 ### 6.5 Users (administrators)
 

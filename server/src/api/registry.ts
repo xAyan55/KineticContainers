@@ -89,6 +89,7 @@ export const ROUTE_REGISTRY: RouteSpec[] = [
   { method: "DELETE", path: "/nodes/:id", scope: "nodes:delete", tag: "Nodes", operationId: "deleteNode", summary: "Remove an eligible node registration. Containers are never destroyed.", admin: true, sensitive: true },
   { method: "POST", path: "/nodes/:id/check", scope: "nodes:health:check", tag: "Nodes", operationId: "checkNodeHealth", summary: "Run and persist a real health check.", admin: true },
   { method: "POST", path: "/nodes/:id/test", scope: "nodes:health:check", tag: "Nodes", operationId: "testNodeConnectivity", summary: "Connectivity test against the node.", admin: true },
+  { method: "POST", path: "/nodes/:id/rotate-credential", scope: "nodes:update", tag: "Nodes", operationId: "rotateNodeCredential", summary: "Rotate the authentication credential for a remote node.", admin: true, sensitive: true },
   { method: "GET", path: "/nodes/:id/containers", scope: "nodes:containers:read", tag: "Nodes", operationId: "listNodeContainers", summary: "Managed and unmanaged containers known to the node.", admin: true },
 
   // --- Users --------------------------------------------------------------

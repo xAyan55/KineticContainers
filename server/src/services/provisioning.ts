@@ -2,14 +2,7 @@ import type Database from "better-sqlite3";
 import { z } from "zod";
 import { newId, nowIso } from "../db.js";
 import { recordAudit } from "./audit.js";
-import {
-  containerExistsOnHost,
-  checkHostCapacity,
-  getHostCapacity,
-  getProvider,
-  LocalLxcProvider,
-  readContainerState,
-} from "./virtualization/localAgent.js";
+import { getProviderForNode } from "./virtualization/providerRegistry.js";
 import { ProviderError } from "./virtualization/provider.js";
 
 /**
@@ -62,18 +55,12 @@ export async function provisionInstance(
   actorId: string,
   opts: ProvisionOptions = {}
 ): Promise<ProvisionResult> {
-  const node = db.prepare("SELECT id FROM nodes WHERE id = ?").get(input.node_id) as { id: string } | undefined;
+  const node = db.prepare("SELECT id, status FROM nodes WHERE id = ?").get(input.node_id) as { id: string; status: string } | undefined;
   if (!node) throw new HttpError("NODE_NOT_FOUND", "Selected node is not registered.", 404);
   const owner = db.prepare("SELECT id FROM users WHERE id = ?").get(input.owner_id) as { id: string } | undefined;
   if (!owner) throw new HttpError("OWNER_NOT_FOUND", "Selected owner does not exist.", 404);
-  if (!LocalLxcProvider.supportedTemplates().includes(input.template)) {
-    throw new HttpError("UNSUPPORTED_TEMPLATE", "Requested template is not supported.", 400);
-  }
-  const containerId = (input.container_id ?? input.name).trim();
-  const clash = db.prepare("SELECT id FROM instances WHERE container_id = ?").get(containerId) as unknown;
-  if (clash) throw new HttpError("ID_TAKEN", "Container identifier is already in use.", 409);
 
-  const provider = getProvider();
+  const provider = getProviderForNode(node.id);
   if (!provider.capabilities.create) {
     throw new HttpError(
       "INFRA_UNCONFIGURED",
@@ -82,17 +69,48 @@ export async function provisionInstance(
     );
   }
 
-  // Admission check against real free host capacity (never invent room).
+  let supportedTemplates: string[];
   try {
-    checkHostCapacity(await getHostCapacity(), { memoryMb: input.memory_mb, storageGb: input.storage_gb });
+    supportedTemplates = await provider.getSupportedTemplates(node.id);
   } catch (err) {
     if (err instanceof ProviderError) throw err;
+    throw new HttpError("PROVIDER_ERROR", "Could not check supported templates on node.", 502);
+  }
+  if (!supportedTemplates.includes(input.template)) {
+    throw new HttpError("UNSUPPORTED_TEMPLATE", "Requested template is not supported.", 400);
+  }
+
+  const containerId = (input.container_id ?? input.name).trim();
+  const clash = db.prepare("SELECT id FROM instances WHERE container_id = ?").get(containerId) as unknown;
+  if (clash) throw new HttpError("ID_TAKEN", "Container identifier is already in use.", 409);
+
+  // Admission check against real free host capacity (never invent room).
+  try {
+    const capacity = await provider.getHostCapacity(node.id);
+    const freeMb = capacity.memoryFreeMb ?? capacity.memoryAvailableMb ?? 0;
+    const availGb = capacity.diskAvailGb ?? capacity.storageAvailableGb ?? null;
+    if (freeMb > 0 && input.memory_mb > freeMb) {
+      throw new HttpError(
+        "INSUFFICIENT_CAPACITY",
+        `Host has only ${freeMb} MB free memory; ${input.memory_mb} MB requested.`,
+        409
+      );
+    }
+    if (availGb !== null && availGb !== undefined && input.storage_gb > availGb) {
+      throw new HttpError(
+        "INSUFFICIENT_CAPACITY",
+        `Host has only ${availGb} GB free on the container filesystem; ${input.storage_gb} GB requested.`,
+        409
+      );
+    }
+  } catch (err) {
+    if (err instanceof ProviderError || err instanceof HttpError) throw err;
     throw new HttpError("PROVIDER_ERROR", "Could not verify host capacity.", 502);
   }
 
   // Uniqueness against the real host, not just the database.
   try {
-    if (await containerExistsOnHost(containerId)) {
+    if (await provider.containerExists(node.id, containerId)) {
       throw new HttpError("CONTAINER_EXISTS", "A container with this identifier already exists on the host.", 409);
     }
   } catch (err) {
@@ -124,7 +142,7 @@ export async function provisionInstance(
     });
     hostContainerOurs = true;
     // Confirm the real state (and the applied template/resources) before persisting success.
-    const liveState = await readContainerState(containerId).catch(() => "UNKNOWN" as const);
+    const liveState = await provider.readContainerState(node.id, containerId).catch(() => "UNKNOWN" as const);
     const status = liveState === "RUNNING" ? "running" : liveState === "STOPPED" ? "stopped" : (created.status ?? "stopped");
     db.prepare("UPDATE instances SET status = ?, updated_at = ? WHERE id = ?").run(status, nowIso(), id);
     recordAudit(db, { actorId, action: "instance.create", targetType: "instance", targetId: id, detail: { node: node.id, owner: owner.id, status } });

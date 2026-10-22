@@ -570,19 +570,63 @@ export async function checkNodeHealth(db: Database.Database, nodeId: string): Pr
   const node = getNodeRow(db, nodeId);
 
   if (node.endpoint !== "local") {
-    const detail = "Remote node agent is not implemented; only the local host integration is supported.";
-    persistHealth(db, nodeId, { status: "unavailable", ok: false, checkedAt, error: detail, capabilities: null });
-    return {
-      status: "unavailable",
-      ok: false,
-      checkedAt,
-      detail,
-      checks: { lxcInstalled: false, commandsOk: false, permissionsOk: false, inventoryOk: false, resourcesOk: false },
-      host: null,
-      hostCapabilities: null,
-      containersTotal: null,
-      containersRunning: null,
-    };
+    const { getProviderForNode } = await import("./providerRegistry.js");
+    const provider = getProviderForNode(nodeId);
+    if (provider.kind === "unconfigured") {
+      const detail = "Remote node agent is not implemented; only the local host integration is supported.";
+      persistHealth(db, nodeId, { status: "unavailable", ok: false, checkedAt, error: detail, capabilities: null });
+      return {
+        status: "unavailable",
+        ok: false,
+        checkedAt,
+        detail,
+        checks: { lxcInstalled: false, commandsOk: false, permissionsOk: false, inventoryOk: false, resourcesOk: false },
+        host: null,
+        hostCapabilities: null,
+        containersTotal: null,
+        containersRunning: null,
+      };
+    }
+    try {
+      const res = await provider.getNodeHealth(nodeId);
+      persistHealth(db, nodeId, {
+        status: res.status,
+        ok: res.ok,
+        checkedAt: res.checkedAt,
+        error: res.ok ? null : res.detail,
+        capabilities: JSON.stringify({
+          containersTotal: res.containersTotal,
+          containersRunning: res.containersRunning,
+          readiness: res.hostCapabilities,
+          host: res.host,
+        }),
+      });
+      return {
+        status: res.status,
+        ok: res.ok,
+        checkedAt: res.checkedAt,
+        detail: res.detail,
+        checks: res.checks,
+        host: res.host as any,
+        hostCapabilities: res.hostCapabilities as any,
+        containersTotal: res.containersTotal,
+        containersRunning: res.containersRunning,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Remote health check failed.";
+      persistHealth(db, nodeId, { status: "error", ok: false, checkedAt, error: message, capabilities: null });
+      return {
+        status: "error",
+        ok: false,
+        checkedAt,
+        detail: message,
+        checks: { lxcInstalled: false, commandsOk: false, permissionsOk: false, inventoryOk: false, resourcesOk: false },
+        host: null,
+        hostCapabilities: null,
+        containersTotal: null,
+        containersRunning: null,
+      };
+    }
   }
 
   try {
@@ -663,11 +707,18 @@ export async function getNodeContainers(
   nodeId: string
 ): Promise<{ nodeId: string; checkedAt: string; containers: NodeContainer[] }> {
   const node = getNodeRow(db, nodeId);
+  let live: ContainerInfo[];
   if (node.endpoint !== "local") {
-    throw new ProviderError("REMOTE_NODE_UNSUPPORTED", "Container inventory is only available for the local node.", 409);
+    const { getProviderForNode } = await import("./providerRegistry.js");
+    const provider = getProviderForNode(nodeId);
+    if (provider.kind === "unconfigured") {
+      throw new ProviderError("REMOTE_NODE_UNSUPPORTED", "Container inventory is only available for the local node.", 409);
+    }
+    live = await provider.listContainers(nodeId);
+  } else {
+    const { stdout } = await runLxc("lxc-ls", ["-f"]);
+    live = parseLxcLs(stdout);
   }
-  const { stdout } = await runLxc("lxc-ls", ["-f"]);
-  const live = parseLxcLs(stdout);
   const owned = db
     .prepare(
       `SELECT i.container_id AS container_id, u.id AS owner_id, u.name AS owner_name, u.email AS owner_email

@@ -156,21 +156,113 @@ See `.env.example` for all variables. Key settings:
 
 Runtime settings (persisted in SQLite, editable at `/admin/settings`): application name, description, page title, registration toggle (default off), session TTL, password policy, timezone, nodes.
 
-## LXC integration status
+## Virtualization & Node Architecture
 
-- `server/src/services/virtualization/provider.ts` defines `VirtualizationProvider`.
-- `server/src/services/virtualization/localAgent.ts` implements it for the local host using `lxc-ls`, `lxc-create`, `lxc-start`, `lxc-stop`, `lxc-destroy` with timeouts, bounded output, strict identifier validation, and no shell-string concatenation.
-- Remote nodes: an endpoint other than `local` is accepted for inventory but operations return `REMOTE_NODE_UNSUPPORTED` until a real encrypted agent exists.
-- No node registered: provider is `unconfigured`; Overview shows “No virtualization node configured”, Create is unavailable, instance actions return `409` with an honest message.
+KineticCT uses a node-aware virtualization provider model:
+- `server/src/services/virtualization/provider.ts`: Defines the `VirtualizationProvider` interface, capability flags, and typed signatures for container lifecycles, resource enforcement, filesystem manipulation, metrics, and terminal access.
+- `server/src/services/virtualization/providerRegistry.ts`: Resolves instances and host actions through `getProviderForNode(nodeId)`. Container operations are never executed on the local controller when an instance is assigned to a remote node.
+- `server/src/services/virtualization/localAgent.ts`: Drives the controller's own host when running on the protected `Local Node` (`id: 'local'`) using safe `lxc-*` execution.
+- `server/src/services/virtualization/remoteProvider.ts`: Communicates with remote Linux VPS or hypervisor servers over authenticated, encrypted HTTPS APIs.
+- `agent/`: A standalone, production-oriented daemon running on remote nodes (including NAT/CGNAT VPS hosts behind Cloudflare Tunnels).
 
-## Node management
+## Remote Node Setup & NAT VPS Deployment
 
-The admin **Nodes** page (`/admin/nodes`) manages the hosts that run LXC containers.
+KineticCT supports distributed hypervisors and NAT VPS setups where the remote node has no public IPv4 address or inbound open ports:
 
-- **Local Node:** on first boot (and every boot, idempotently) the backend registers its own host as node id `local` named "Local Node" (migration v2 + boot-time `ensureLocalNode`). It can be renamed but never converted to a remote node or deleted. Duplicate local rows from older databases are merged on upgrade without touching instances.
-- **Health checks:** opening node details (or Refresh) runs a live check — LXC tooling presence, inventory readability, host resources (hostname, OS, kernel, arch, memory, CPU sample, root filesystem, container counts) — and persists status (`online` / `unconfigured` / `unavailable` / `error` / `offline`), last-check time, and last-known-good inventory. Metrics that cannot be collected show as `Unavailable`, never invented.
-- **Host dependencies:** `lxc-ls` (and friends) must be on `PATH` and executable by the backend user (typically root for container operations). Missing tooling reports `Unconfigured` with an explanation; permission problems report `Error`.
-- **Remote nodes:** can be saved as configuration records (name + host address) but stay `Unconfigured` — connectivity checks and inventory honestly return `REMOTE_NODE_UNSUPPORTED` until a secure remote agent is implemented. Removing a registration never touches host containers; nodes with managed instances cannot be removed until reassigned.
+```text
+KineticCT Controller
+       │ (outbound HTTPS request)
+       ▼
+Public Cloudflare Tunnel Hostname (e.g. https://node.example.com)
+       │ (Cloudflare edge proxy)
+       ▼
+cloudflared daemon (running on the remote NAT VPS)
+       │ (loopback HTTPS to origin on port 5433)
+       ▼
+KineticCT Remote Node Agent (127.0.0.1:5433)
+       │ (safe unprivileged/privileged execution allowlists)
+       ▼
+Linux LXC subsystem (cgroups v1/v2, lxcfs, storage quotas)
+```
+
+### 1. Install the KineticCT Agent on the Remote Host
+
+On your remote Linux server or NAT VPS (Debian, Ubuntu, AlmaLinux, Alpine):
+
+```bash
+# Using the standalone agent installer:
+curl -fsSL https://raw.githubusercontent.com/xAyan55/KineticContainers/main/agent/install-agent.sh | sudo bash -s -- --port 5433
+
+# Or from the cloned repository:
+./install.sh --agent
+```
+
+The agent is installed as a systemd service (`kineticct-agent.service`), generates a self-signed origin certificate in `/etc/kineticct/`, and listens on `127.0.0.1:5433` by default.
+
+### 2. Configure Cloudflare Tunnel on the NAT VPS
+
+Install `cloudflared` on the remote VPS to create an outbound tunnel to Cloudflare. No open inbound firewall ports (such as 22, 80, or 443) are required.
+
+#### Option A: Locally Managed Tunnel (`config.yml`)
+In `/etc/cloudflared/config.yml`:
+
+```yaml
+tunnel: <TUNNEL_UUID>
+credentials-file: /etc/cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  - hostname: node.example.com
+    service: https://localhost:5433
+    originRequest:
+      noTLSVerify: true
+  - service: http_status:404
+```
+
+> **Important:** `noTLSVerify: true` is set on the tunnel origin connection because the agent generates a local self-signed origin certificate. This applies only between `cloudflared` and the local agent process on the same machine.
+
+#### Option B: Remotely Managed Tunnel (Zero Trust Dashboard)
+1. Go to **Cloudflare Zero Trust** → **Networks** → **Tunnels**.
+2. Under **Public Hostname**, set:
+   - **Service**: `HTTPS`
+   - **URL**: `localhost:5433`
+   - **Additional application settings** → **TLS**: Enable **No TLS Verify**.
+
+#### Optional: Cloudflare Access Protection
+To add an additional security boundary, protect the hostname with a Cloudflare Access application requiring a **Service Token**. Obtain the `CF-Access-Client-Id` and `CF-Access-Client-Secret` to enter in KineticCT.
+
+### 3. Enroll the Node in KineticCT
+
+1. Sign in to the KineticCT panel as an administrator and navigate to **Nodes**.
+2. Click **Add Node**:
+   - **Node display name**: e.g., `us-east-nat-vps`
+   - **Connection type**: `Remote Node`
+   - **Remote Agent Public HTTPS URL**: `https://node.example.com` (must be the public tunnel URL; loopback addresses are rejected)
+   - **Cloudflare Access (optional)**: Enter Client ID and Client Secret if configured.
+3. Click **Enroll and register node**.
+4. The panel generates a high-entropy node authentication token. **Copy this credential** immediately.
+5. On the remote VPS, set the credential in `/etc/kineticct-agent/agent.env`:
+   ```bash
+   KINETICCT_NODE_AUTH_CREDENTIAL="<YOUR_COPIED_CREDENTIAL>"
+   ```
+6. Restart the agent service:
+   ```bash
+   sudo systemctl restart kineticct-agent
+   ```
+7. In the KineticCT Nodes panel, click **Refresh** / **Test connection**. Once verified, the node status turns **Online**, showing host CPU, memory, OS, kernel, and LXC readiness.
+
+### 4. Controller-to-Agent TLS Verification
+
+There are two separate TLS connections:
+1. **Cloudflare to Agent (`localhost:5433`)**: Managed by `cloudflared` using `noTLSVerify: true` for the local self-signed origin cert.
+2. **Controller to Cloudflare (`https://node.example.com`)**: Uses standard public Cloudflare TLS certificates. Certificate verification remains strictly enabled on the controller.
+3. **Advanced Direct Connections**: If connecting the controller directly to a remote agent without Cloudflare using a self-signed certificate, check **Skip TLS Certificate Verification** in the node's settings. This setting is stored per-node and strictly isolated to outbound requests for that specific node — `NODE_TLS_REJECT_UNAUTHORIZED` is never modified process-wide.
+
+## Credential Storage & Encryption
+
+- Privileged remote node credentials and Cloudflare Access secrets are encrypted at rest using **AES-256-GCM**.
+- The 256-bit master key is persisted in `data/encryption.key` with `0600` permissions (or read from `KINETICCT_ENCRYPTION_KEY`). The installer automatically generates and preserves this key across upgrades.
+- Serializers (`publicNode`) and API logs redact all secrets. Plaintext credentials are never returned after enrollment.
+- Credential rotation is supported via **Rotate Credential**, generating a new token and revoking previous access without exposing past secrets.
 
 ## Security model
 

@@ -1,0 +1,25 @@
+[Unit]
+Description=KineticCT Remote Node Agent
+Documentation=https://github.com/xAyan55/KineticContainers
+After=network.target lxc.service
+Wants=lxc.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/kineticct-agent
+ExecStart=/usr/bin/node /opt/kineticct-agent/dist/index.js --config /etc/kineticct/agent.json
+Restart=always
+RestartSec=5s
+LimitNOFILE=65536
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+# Sandboxing & security hardening
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
