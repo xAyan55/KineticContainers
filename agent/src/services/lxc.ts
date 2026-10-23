@@ -163,31 +163,28 @@ export function parseLxcLs(output: string): ContainerInfo[] {
     .filter(Boolean);
   if (lines.length === 0) return [];
 
-  const headers = lines[0].toLowerCase().split(/\s{2,}/);
-  const nameIdx = headers.findIndex((h) => h.includes("name"));
-  const stateIdx = headers.findIndex((h) => h.includes("state"));
-  const ipv4Idx = headers.findIndex((h) => h.includes("ipv4"));
-
   const results: ContainerInfo[] = [];
-  for (let i = 1; i < lines.length; i++) {
-    const parts = lines[i].split(/\s{2,}/);
-    const rawName = nameIdx >= 0 ? parts[nameIdx]?.trim() : parts[0]?.trim();
-    if (!rawName) continue;
-    const rawState = stateIdx >= 0 ? parts[stateIdx]?.trim()?.toLowerCase() : parts[1]?.trim()?.toLowerCase();
-    const rawIpv4 = ipv4Idx >= 0 ? parts[ipv4Idx]?.trim() : undefined;
+  for (const line of lines) {
+    const parts = line.split(/[\s,]+/);
+    if (parts.length === 0) continue;
+    const name = (parts[0] ?? "").trim();
+    if (!name || name.toUpperCase() === "NAME") continue;
+    const rawState = (parts[1] ?? "").toLowerCase();
 
     let status: ContainerStatus = "unknown";
-    if (rawState === "running") status = "running";
-    else if (rawState === "stopped") status = "stopped";
-    else if (rawState === "starting") status = "starting";
-    else if (rawState === "stopping") status = "stopping";
-    else if (rawState === "aborted" || rawState === "failed") status = "failed";
+    if (rawState.includes("run")) status = "running";
+    else if (rawState.includes("stop")) status = "stopped";
+    else if (rawState.includes("start")) status = "starting";
+    else if (rawState.includes("stopp")) status = "stopping";
+    else if (rawState.includes("abort") || rawState.includes("fail")) status = "failed";
+
+    const ipv4 = parts.find((p) => /^\d+\.\d+\.\d+\.\d+$/.test(p));
 
     results.push({
-      containerId: rawName,
-      name: rawName,
+      containerId: name,
+      name,
       status,
-      ipv4: rawIpv4 && rawIpv4 !== "-" ? rawIpv4.split(",")[0].trim() : undefined,
+      ipv4,
     });
   }
   return results;
