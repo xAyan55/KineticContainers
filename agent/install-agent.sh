@@ -76,10 +76,17 @@ if [ "$SKIP_LXC" -eq 0 ]; then
     dnf install -y -q lxc lxc-templates debootstrap bridge-utils openssl curl git lxcfs gcc-c++ make python3 || true
   elif command -v apk >/dev/null 2>&1; then
     apk add --quiet lxc lxc-templates debootstrap bridge-utils openssl curl git lxcfs || true
-  else
     warn "Unsupported package manager. Please ensure LXC, bridge-utils, and openssl are installed."
+  fi
+
   if command -v systemctl >/dev/null 2>&1; then
     systemctl enable --now lxcfs >/dev/null 2>&1 || true
+    # Prevent dnsmasq on lxcbr0 from assigning/advertising unreachable IPv6 ULA routes
+    mkdir -p /etc/default
+    if [ ! -f /etc/default/lxc-net ] || ! grep -q 'LXC_IPV6_ENABLE' /etc/default/lxc-net; then
+      printf 'USE_LXC_BRIDGE="true"\nLXC_IPV6_ENABLE="false"\n' >> /etc/default/lxc-net
+      systemctl restart lxc-net >/dev/null 2>&1 || true
+    fi
   fi
 fi
 

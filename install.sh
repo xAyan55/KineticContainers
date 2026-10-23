@@ -334,10 +334,15 @@ setup_lxc_network() {
     warn "lxc-net unit not found; container networking stays unverified."
     return 1
   fi
+  # Prevent dnsmasq on lxcbr0 from advertising unreachable IPv6 ULA routes
+  if [ ! -f /etc/default/lxc-net ] || ! grep -q 'LXC_IPV6_ENABLE' /etc/default/lxc-net 2>/dev/null; then
+    printf 'USE_LXC_BRIDGE="true"\nLXC_IPV6_ENABLE="false"\n' | run_root tee -a /etc/default/lxc-net >/dev/null 2>&1 || true
+  fi
   if ! run_root systemctl enable --now lxc-net >/dev/null 2>&1; then
     warn "Could not start lxc-net."
     return 1
   fi
+  run_root systemctl restart lxc-net >/dev/null 2>&1 || true
   sleep 2
   if [ "$(kct_bridge lxcbr0)" = "present" ]; then
     info "Bridge lxcbr0 is up via lxc-net."
