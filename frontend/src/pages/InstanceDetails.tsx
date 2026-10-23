@@ -347,10 +347,20 @@ export function ConsoleTab({ instanceId }: { instanceId: string }) {
       term.focus();
     };
 
-    ws.onmessage = (ev: MessageEvent) => {
+    ws.onmessage = async (ev: MessageEvent) => {
+      let text = "";
+      if (typeof ev.data === "string") {
+        text = ev.data;
+      } else if (ev.data instanceof Blob) {
+        text = await ev.data.text();
+      } else if (ev.data instanceof ArrayBuffer) {
+        text = new TextDecoder().decode(ev.data);
+      } else {
+        return;
+      }
       let msg: { type?: string; data?: string; message?: string };
       try {
-        msg = JSON.parse(String(ev.data));
+        msg = JSON.parse(text);
       } catch {
         return;
       }

@@ -316,19 +316,29 @@ export class RemoteAgentProvider implements VirtualizationProvider {
       headers,
     });
 
-    agentWs.on("open", () => {
-      // Pipe client to agent
-      clientWs.on("message", (msg) => {
-        if (agentWs.readyState === WebSocket.OPEN) {
-          agentWs.send(msg);
-        }
-      });
+    const pendingQueue: string[] = [];
+
+    clientWs.on("message", (msg) => {
+      const text = typeof msg === "string" ? msg : (msg as Buffer).toString("utf8");
+      if (agentWs.readyState === WebSocket.OPEN) {
+        agentWs.send(text);
+      } else if (agentWs.readyState === WebSocket.CONNECTING) {
+        pendingQueue.push(text);
+      }
     });
 
-    // Pipe agent to client
-    agentWs.on("message", (msg) => {
+    agentWs.on("open", () => {
+      while (pendingQueue.length > 0) {
+        const item = pendingQueue.shift();
+        if (item) agentWs.send(item);
+      }
+    });
+
+    // Pipe agent to client as text frames so browsers receive strings rather than Blobs
+    agentWs.on("message", (data) => {
       if (clientWs.readyState === WebSocket.OPEN) {
-        clientWs.send(msg);
+        const text = typeof data === "string" ? data : (data as Buffer).toString("utf8");
+        clientWs.send(text);
       }
     });
 
