@@ -71,9 +71,9 @@ if [ "$SKIP_LXC" -eq 0 ]; then
   if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
-    apt-get install -y -qq lxc lxc-templates debootstrap bridge-utils uidmap openssl curl git lxcfs
+    apt-get install -y -qq lxc lxc-templates debootstrap bridge-utils uidmap openssl curl git lxcfs build-essential python3 make g++
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y -q lxc lxc-templates debootstrap bridge-utils openssl curl git lxcfs || true
+    dnf install -y -q lxc lxc-templates debootstrap bridge-utils openssl curl git lxcfs gcc-c++ make python3 || true
   elif command -v apk >/dev/null 2>&1; then
     apk add --quiet lxc lxc-templates debootstrap bridge-utils openssl curl git lxcfs || true
   else
