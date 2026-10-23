@@ -309,6 +309,7 @@ export class RemoteAgentProvider implements VirtualizationProvider {
     wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
     wsUrl.pathname = `/v1/containers/${encodeURIComponent(containerId)}/console`;
     if (template) wsUrl.searchParams.set("template", template);
+    if (this.authToken) wsUrl.searchParams.set("token", this.authToken);
 
     const headers = this.buildHeaders();
     const agentWs = new WebSocket(wsUrl.toString(), {
@@ -316,12 +317,44 @@ export class RemoteAgentProvider implements VirtualizationProvider {
       headers,
     });
 
+    const safeClose = (ws: WebSocket, code?: number, reason?: string | Buffer): void => {
+      try {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          const validCode =
+            typeof code === "number" &&
+            code >= 1000 &&
+            code <= 4999 &&
+            code !== 1004 &&
+            code !== 1005 &&
+            code !== 1006 &&
+            code !== 1014 &&
+            code !== 1015
+              ? code
+              : 1000;
+          const validReason = typeof reason === "string" ? reason.slice(0, 120) : reason ? reason.toString("utf8").slice(0, 120) : undefined;
+          ws.close(validCode, validReason);
+        }
+      } catch {
+        /* ignore close errors */
+      }
+    };
+
+    const safeSend = (ws: WebSocket, data: string): void => {
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
+      } catch {
+        /* ignore send errors */
+      }
+    };
+
     const pendingQueue: string[] = [];
 
     clientWs.on("message", (msg) => {
       const text = typeof msg === "string" ? msg : (msg as Buffer).toString("utf8");
       if (agentWs.readyState === WebSocket.OPEN) {
-        agentWs.send(text);
+        safeSend(agentWs, text);
       } else if (agentWs.readyState === WebSocket.CONNECTING) {
         pendingQueue.push(text);
       }
@@ -330,35 +363,31 @@ export class RemoteAgentProvider implements VirtualizationProvider {
     agentWs.on("open", () => {
       while (pendingQueue.length > 0) {
         const item = pendingQueue.shift();
-        if (item) agentWs.send(item);
+        if (item) safeSend(agentWs, item);
       }
     });
 
     // Pipe agent to client as text frames so browsers receive strings rather than Blobs
     agentWs.on("message", (data) => {
-      if (clientWs.readyState === WebSocket.OPEN) {
-        const text = typeof data === "string" ? data : (data as Buffer).toString("utf8");
-        clientWs.send(text);
-      }
+      const text = typeof data === "string" ? data : (data as Buffer).toString("utf8");
+      safeSend(clientWs, text);
     });
 
     agentWs.on("close", (code, reason) => {
-      if (clientWs.readyState === WebSocket.OPEN) {
-        clientWs.close(code, reason);
-      }
+      safeClose(clientWs, code, reason);
     });
 
     agentWs.on("error", (err) => {
-      if (clientWs.readyState === WebSocket.OPEN) {
-        clientWs.send(JSON.stringify({ type: "error", message: `Agent websocket error: ${err.message}` }));
-        clientWs.close(4502, "Agent connection error.");
-      }
+      safeSend(clientWs, JSON.stringify({ type: "error", message: `Agent websocket error: ${err.message}` }));
+      safeClose(clientWs, 4502, "Agent connection error.");
     });
 
     clientWs.on("close", () => {
-      if (agentWs.readyState === WebSocket.OPEN || agentWs.readyState === WebSocket.CONNECTING) {
-        agentWs.close();
-      }
+      safeClose(agentWs, 1000, "client disconnect");
+    });
+
+    clientWs.on("error", () => {
+      safeClose(agentWs, 1000, "client error");
     });
   }
 
