@@ -110,10 +110,13 @@ info "Using Node $(node -v) at $(command -v node)"
 # 3. Setup Agent Directory
 say "3. Setting up agent application in ${INSTALL_DIR}..."
 mkdir -p "${INSTALL_DIR}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# If running from local git checkout, copy files; otherwise clone/fetch
+SCRIPT_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
+fi
 
-# If running from checkout, copy files; otherwise clone/fetch
-if [ -f "${SCRIPT_DIR}/package.json" ]; then
+if [ -n "${SCRIPT_DIR}" ] && [ -f "${SCRIPT_DIR}/package.json" ]; then
   cp -r "${SCRIPT_DIR}/"* "${INSTALL_DIR}/"
 else
   TMP_CLONE=$(mktemp -d)
