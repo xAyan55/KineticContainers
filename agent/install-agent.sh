@@ -78,6 +78,8 @@ if [ "$SKIP_LXC" -eq 0 ]; then
     apk add --quiet lxc lxc-templates debootstrap bridge-utils openssl curl git lxcfs || true
   else
     warn "Unsupported package manager. Please ensure LXC, bridge-utils, and openssl are installed."
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable --now lxcfs >/dev/null 2>&1 || true
   fi
 fi
 
