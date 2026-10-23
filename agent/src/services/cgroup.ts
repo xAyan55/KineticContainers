@@ -173,23 +173,38 @@ export async function getContainerMetrics(containerId: string): Promise<Containe
   };
 }
 
+/** Config keys managed by KineticCT (both cgroup generations). */
+const MANAGED_KEYS = [
+  "lxc.cgroup.cpu.cfs_period_us",
+  "lxc.cgroup.cpu.cfs_quota_us",
+  "lxc.cgroup.memory.limit_in_bytes",
+  "lxc.cgroup.cpuset.cpus",
+  "lxc.cgroup2.cpu.max",
+  "lxc.cgroup2.memory.max",
+  "lxc.cgroup2.cpuset.cpus",
+];
+
 export function buildCgroupConfig(version: CgroupVersion, limits: ResourceLimits, hostCpus: number): string[] {
   const lines: string[] = [];
-  const prefix = version === "v2" ? "lxc.cgroup2" : "lxc.cgroup";
+  const quota = Math.round(limits.cpu * 100000);
+  const bytes = Math.round(limits.memoryMb * 1024 * 1024);
 
-  if (Number.isInteger(limits.cpu) && limits.cpu >= 1) {
-    const capped = Math.min(limits.cpu, hostCpus);
-    const range = capped === 1 ? "0" : `0-${capped - 1}`;
-    lines.push(`${prefix}.cpuset.cpus = ${range}`);
+  if (version === "v1") {
+    lines.push("lxc.cgroup.cpu.cfs_period_us = 100000");
+    lines.push(`lxc.cgroup.cpu.cfs_quota_us = ${quota}`);
+    lines.push(`lxc.cgroup.memory.limit_in_bytes = ${bytes}`);
+  } else {
+    lines.push(`lxc.cgroup2.cpu.max = ${quota} 100000`);
+    lines.push(`lxc.cgroup2.memory.max = ${bytes}`);
   }
 
-  if (Number.isInteger(limits.memoryMb) && limits.memoryMb >= 128) {
-    const bytes = limits.memoryMb * 1024 * 1024;
-    if (version === "v2") {
-      lines.push(`lxc.cgroup2.memory.max = ${bytes}`);
-    } else {
-      lines.push(`lxc.cgroup.memory.limit_in_bytes = ${bytes}`);
-    }
+  // Shared CPU affinity set sized to the vCPU allocation for guest-visible enumeration
+  const visible = hostCpus > 0 ? Math.max(1, Math.min(limits.cpu, hostCpus)) : 0;
+  if (visible > 0) {
+    const spec = visible === 1 ? "0" : `0-${visible - 1}`;
+    lines.push(
+      version === "v1" ? `lxc.cgroup.cpuset.cpus = ${spec}` : `lxc.cgroup2.cpuset.cpus = ${spec}`
+    );
   }
 
   return lines;
@@ -232,16 +247,12 @@ export async function applyResourceLimits(
   const newLines = buildCgroupConfig(cgVer, limits, hostCpus);
 
   let text = fs.readFileSync(cfgPath, "utf8");
+  // Strip all managed cgroup keys before re-adding the new ones
   const filtered = text
     .split("\n")
     .filter((l) => {
-      const trimmed = l.trim();
-      return (
-        !trimmed.startsWith("lxc.cgroup.cpuset.cpus") &&
-        !trimmed.startsWith("lxc.cgroup2.cpuset.cpus") &&
-        !trimmed.startsWith("lxc.cgroup.memory.limit_in_bytes") &&
-        !trimmed.startsWith("lxc.cgroup2.memory.max")
-      );
+      const key = l.split("=")[0]?.trim() ?? "";
+      return !MANAGED_KEYS.includes(key);
     })
     .join("\n")
     .trimEnd();
@@ -252,18 +263,27 @@ export async function applyResourceLimits(
   // If container is running, attempt live cgroup updates
   const state = await readContainerState(containerId).catch(() => "UNKNOWN");
   if (state === "RUNNING") {
-    if (limits.cpu) {
-      const capped = Math.min(limits.cpu, hostCpus);
-      const range = capped === 1 ? "0" : `0-${capped - 1}`;
-      await runLxc("lxc-cgroup", ["-n", containerId, "cpuset.cpus", range]).catch(() => undefined);
-    }
-    if (limits.memoryMb) {
-      const bytes = String(limits.memoryMb * 1024 * 1024);
-      if (cgVer === "v2") {
-        await runLxc("lxc-cgroup", ["-n", containerId, "memory.max", bytes]).catch(() => undefined);
-      } else {
-        await runLxc("lxc-cgroup", ["-n", containerId, "memory.limit_in_bytes", bytes]).catch(() => undefined);
-      }
+    const quota = Math.round(limits.cpu * 100000);
+    const memBytes = String(Math.round(limits.memoryMb * 1024 * 1024));
+    const visible = hostCpus > 0 ? Math.max(1, Math.min(limits.cpu, hostCpus)) : 0;
+    const cpusetSpec = visible === 1 ? "0" : `0-${visible - 1}`;
+
+    const liveKeys: [string, string][] =
+      cgVer === "v1"
+        ? [
+            ["cpu.cfs_period_us", "100000"],
+            ["cpu.cfs_quota_us", String(quota)],
+            ["memory.limit_in_bytes", memBytes],
+            ...(visible > 0 ? [["cpuset.cpus", cpusetSpec] as [string, string]] : []),
+          ]
+        : [
+            ["cpu.max", `${quota} 100000`],
+            ["memory.max", memBytes],
+            ...(visible > 0 ? [["cpuset.cpus", cpusetSpec] as [string, string]] : []),
+          ];
+
+    for (const [key, value] of liveKeys) {
+      await runLxc("lxc-cgroup", ["-n", containerId, key, value]).catch(() => undefined);
     }
   }
 
@@ -308,7 +328,19 @@ export async function readEffectiveConfig(containerId: string): Promise<Effectiv
     const key = k.trim().toLowerCase();
     const val = vParts.join("=").trim();
 
-    if (key === "lxc.cgroup.cpuset.cpus" || key === "lxc.cgroup2.cpuset.cpus") {
+    // CPU: prefer hard quota over cpuset count
+    if (key === "lxc.cgroup.cpu.cfs_quota_us") {
+      const q = parseInt(val, 10);
+      if (Number.isFinite(q) && q > 0) {
+        cpuLimit = Math.round((q / 100000) * 100) / 100;
+      }
+    } else if (key === "lxc.cgroup2.cpu.max") {
+      const q = parseInt(val.split(/\s+/)[0], 10);
+      if (Number.isFinite(q) && q > 0) {
+        cpuLimit = Math.round((q / 100000) * 100) / 100;
+      }
+    } else if (cpuLimit === null && (key === "lxc.cgroup.cpuset.cpus" || key === "lxc.cgroup2.cpuset.cpus")) {
+      // Fallback: use cpuset count if no hard quota is set
       cpuLimit = parseCpusetCount(val);
     } else if (key === "lxc.cgroup2.memory.max" || key === "lxc.cgroup.memory.limit_in_bytes") {
       const bytes = parseInt(val, 10);
