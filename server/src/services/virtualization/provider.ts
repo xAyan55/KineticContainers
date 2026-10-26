@@ -265,6 +265,7 @@ export interface VirtualizationProvider {
   deleteContainer(nodeId: string, containerId: string): Promise<void>;
   containerExists(nodeId: string, containerId: string): Promise<boolean>;
   readContainerState(nodeId: string, containerId: string): Promise<string>;
+  changeRootPassword(nodeId: string, containerId: string, password: string): Promise<void>;
 
   // Config, metrics, network, storage
   getContainerNetwork(nodeId: string, containerId: string): Promise<ContainerNetworkInfo>;

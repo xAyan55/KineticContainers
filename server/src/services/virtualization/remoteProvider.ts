@@ -265,6 +265,10 @@ export class RemoteAgentProvider implements VirtualizationProvider {
     }
   }
 
+  async changeRootPassword(nodeId: string, containerId: string, password: string): Promise<void> {
+    await this.request<{ ok: boolean }>(`/v1/containers/${encodeURIComponent(containerId)}/password`, "POST", { password });
+  }
+
   async getContainerNetwork(nodeId: string, containerId: string): Promise<ContainerNetworkInfo> {
     return this.request<ContainerNetworkInfo>(`/v1/containers/${encodeURIComponent(containerId)}/network`, "GET");
   }

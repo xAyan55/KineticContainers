@@ -25,6 +25,7 @@ import {
 import { checkConsoleRunnable } from "../services/virtualization/console.js";
 import { ProviderError, type ContainerMetrics } from "../services/virtualization/provider.js";
 import { getProviderForNode } from "../services/virtualization/providerRegistry.js";
+import { reinstallInstanceSchema, reinstallInstance, HttpError } from "../services/provisioning.js";
 
 export const instancesRouter = Router();
 instancesRouter.use(requireAuth);
@@ -783,6 +784,87 @@ instancesRouter.post("/:id/unsuspend", async (req, res) => {
     detail: { previous_status: "suspended", status: next, container_id: row.container_id },
   });
   res.json({ data: { instance: toPublic(row), live } });
+});
+
+const changePasswordSchema = z.object({
+  password: z.string().min(8, "Password must be at least 8 characters.").max(128),
+});
+
+/**
+ * Change root password on this VPS.
+ * Accessible to instance owners and administrators.
+ */
+instancesRouter.post("/:id/password", async (req, res) => {
+  const parsed = changePasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid password." } });
+    return;
+  }
+  const db = getDb();
+  const row = getManagedInstance(db, req.params.id, req.user!);
+  if (!row) {
+    notFound(res);
+    return;
+  }
+  if (!row.node_id || !row.container_id) {
+    res.status(409).json({ error: { code: "NO_NODE", message: "Instance is not attached to a configured node." } });
+    return;
+  }
+  if (row.status === "suspended") {
+    res.status(403).json({
+      error: { code: "INSTANCE_SUSPENDED", message: "This VPS is suspended. Unsuspend it before changing root password." },
+    });
+    return;
+  }
+  const provider = getProviderForNode(String(row.node_id));
+  try {
+    await provider.changeRootPassword(String(row.node_id), String(row.container_id), parsed.data.password);
+    recordAudit(db, {
+      actorId: req.user!.id,
+      action: "instance.change_password",
+      targetType: "instance",
+      targetId: row.id as string,
+      detail: { container_id: row.container_id },
+    });
+    res.json({ data: { ok: true, message: "Root password changed successfully." } });
+  } catch (err) {
+    providerError(res, err);
+  }
+});
+
+/**
+ * Reinstall the operating system on this VPS.
+ * Wipes container filesystem, applies new template, resets root password if provided.
+ * Accessible to instance owners and administrators.
+ */
+instancesRouter.post("/:id/reinstall", async (req, res) => {
+  const parsed = reinstallInstanceSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { code: "VALIDATION", message: parsed.error.issues[0]?.message ?? "Invalid reinstall payload." } });
+    return;
+  }
+  const db = getDb();
+  const row = getManagedInstance(db, req.params.id, req.user!);
+  if (!row) {
+    notFound(res);
+    return;
+  }
+  if (row.status === "suspended") {
+    res.status(403).json({
+      error: { code: "INSTANCE_SUSPENDED", message: "This VPS is suspended. Unsuspend it before reinstalling." },
+    });
+    return;
+  }
+  try {
+    const result = await reinstallInstance(db, String(row.id), parsed.data, req.user!.id);
+    res.json({ data: { instance: toPublic(result.instance), status: result.status, message: "Operating system reinstalled successfully." } });
+  } catch (err) {
+    if (err instanceof HttpError) {
+      res.status(err.status).json({ error: { code: err.code, message: err.message } });
+      return;
+    }
+    providerError(res, err);
+  }
 });
 
 export const templatesRouter = Router();

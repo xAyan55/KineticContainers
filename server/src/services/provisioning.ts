@@ -37,6 +37,13 @@ export const createInstanceSchema = z.object({
 
 export type CreateInstanceInput = z.infer<typeof createInstanceSchema>;
 
+export const reinstallInstanceSchema = z.object({
+  template: z.string().trim().min(1).max(64),
+  root_password: z.string().min(8, "Root password must be at least 8 characters.").max(128).optional(),
+});
+
+export type ReinstallInstanceInput = z.infer<typeof reinstallInstanceSchema>;
+
 export interface ProvisionOptions {
   /** Pre-generated id so an operation record can reference it before work starts. */
   instanceId?: string;
@@ -166,3 +173,124 @@ export async function provisionInstance(
     throw new HttpError("CREATE_FAILED", message, 502);
   }
 }
+
+export async function reinstallInstance(
+  db: Database.Database,
+  instanceId: string,
+  input: ReinstallInstanceInput,
+  actorId: string
+): Promise<{ instance: Record<string, unknown>; status: string }> {
+  const instance = db.prepare("SELECT * FROM instances WHERE id = ?").get(instanceId) as Record<string, unknown> | undefined;
+  if (!instance) throw new HttpError("NOT_FOUND", "Instance not found.", 404);
+
+  if (instance.status === "suspended") {
+    throw new HttpError("INSTANCE_SUSPENDED", "Suspended instances cannot be reinstalled. Lift suspension first.", 403);
+  }
+
+  const nodeId = String(instance.node_id);
+  const containerId = String(instance.container_id);
+  const provider = getProviderForNode(nodeId);
+
+  if (!provider.capabilities.create || !provider.capabilities.remove) {
+    throw new HttpError("INFRA_UNCONFIGURED", "Reinstallation is unavailable: virtualization node cannot create/delete containers.", 409);
+  }
+
+  let supportedTemplates: string[];
+  try {
+    supportedTemplates = await provider.getSupportedTemplates(nodeId);
+  } catch (err) {
+    if (err instanceof ProviderError) throw err;
+    throw new HttpError("PROVIDER_ERROR", "Could not check supported templates on node.", 502);
+  }
+
+  if (!supportedTemplates.includes(input.template)) {
+    throw new HttpError("UNSUPPORTED_TEMPLATE", "Requested template is not supported.", 400);
+  }
+
+  const oldTemplate = String(instance.template ?? "");
+
+  // Update status to reinstalling
+  db.prepare("UPDATE instances SET status = 'reinstalling', updated_at = ? WHERE id = ?").run(nowIso(), instanceId);
+
+  try {
+    // 1. Stop if running
+    try {
+      const state = await provider.readContainerState(nodeId, containerId).catch(() => "UNKNOWN");
+      if (state === "RUNNING") {
+        await provider.stopContainer(nodeId, containerId);
+      }
+    } catch {
+      // best-effort stop
+    }
+
+    // 2. Delete existing container on host
+    try {
+      if (await provider.containerExists(nodeId, containerId)) {
+        await provider.deleteContainer(nodeId, containerId);
+      }
+    } catch (err) {
+      throw err;
+    }
+
+    // 3. Create fresh container with the requested template and original resources
+    await provider.createContainer(nodeId, {
+      name: String(instance.name),
+      containerId,
+      template: input.template,
+      cpu: Number(instance.cpu),
+      memoryMb: Number(instance.memory_mb),
+      storageGb: Number(instance.storage_gb),
+    });
+
+    // 4. If root password requested, set it
+    if (input.root_password) {
+      await provider.changeRootPassword(nodeId, containerId, input.root_password);
+    }
+
+    // 5. Start container
+    await provider.startContainer(nodeId, containerId);
+
+    // 6. Confirm real state
+    const liveState = await provider.readContainerState(nodeId, containerId).catch(() => "UNKNOWN");
+    const status = liveState === "RUNNING" ? "running" : "stopped";
+
+    const now = nowIso();
+    db.prepare("UPDATE instances SET template = ?, status = ?, updated_at = ? WHERE id = ?").run(
+      input.template,
+      status,
+      now,
+      instanceId
+    );
+
+    recordAudit(db, {
+      actorId,
+      action: "instance.reinstall",
+      targetType: "instance",
+      targetId: instanceId,
+      detail: {
+        container_id: containerId,
+        old_template: oldTemplate,
+        new_template: input.template,
+        status,
+      },
+    });
+
+    const fresh = db.prepare("SELECT * FROM instances WHERE id = ?").get(instanceId) as Record<string, unknown>;
+    return { instance: fresh, status };
+  } catch (err) {
+    db.prepare("UPDATE instances SET status = 'failed', updated_at = ? WHERE id = ?").run(nowIso(), instanceId);
+    recordAudit(db, {
+      actorId,
+      action: "instance.reinstall_failed",
+      targetType: "instance",
+      targetId: instanceId,
+      detail: {
+        container_id: containerId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+    });
+    if (err instanceof ProviderError || err instanceof HttpError) throw err;
+    throw new HttpError("REINSTALL_FAILED", err instanceof Error ? err.message : "Reinstallation failed.", 502);
+  }
+}
+

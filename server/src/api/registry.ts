@@ -71,6 +71,8 @@ export const ROUTE_REGISTRY: RouteSpec[] = [
     sensitive: true,
     scopeResolver: (req) => ((req.body as { action?: string } | undefined)?.action === "remove" ? "instances:delete" : "instances:power"),
   },
+  { method: "POST", path: "/instances/:id/password", scope: "instances:settings:write", tag: "Instances", operationId: "changeInstancePassword", summary: "Change the root password inside the container.", sensitive: true },
+  { method: "POST", path: "/instances/:id/reinstall", scope: "instances:create", tag: "Instances", operationId: "reinstallInstance", summary: "Reinstall the operating system with a supported template.", sensitive: true },
   { method: "GET", path: "/templates", scope: "instances:read", tag: "Instances", operationId: "listTemplates", summary: "Operating-system templates supported by this host." },
   { method: "GET", path: "/instances/:id/files", scope: "instances:files:read", tag: "Files", operationId: "listInstanceFiles", summary: "Browse a container directory with metadata, search, sorting, and pagination." },
   { method: "GET", path: "/instances/:id/files/content", scope: "instances:files:read", tag: "Files", operationId: "readInstanceFile", summary: "Read a UTF-8 text file for editing. Binary and oversized files are refused." },

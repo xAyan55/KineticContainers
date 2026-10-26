@@ -34,6 +34,7 @@ import {
 import type { WebSocket } from "ws";
 import type { AuthUser } from "../../middleware/auth.js";
 import { getDb } from "../../db.js";
+import { sha512Crypt } from "../crypto.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -1918,6 +1919,11 @@ export class LocalLxcProvider implements VirtualizationProvider {
     return readContainerState(containerId);
   }
 
+  async changeRootPassword(nodeId: string, containerId: string, password: string): Promise<void> {
+    this.requireLocalNode(nodeId);
+    await changeContainerRootPassword(containerId, password);
+  }
+
   async getContainerNetwork(nodeId: string, containerId: string): Promise<ContainerNetworkInfo> {
     this.requireLocalNode(nodeId);
     return getContainerNetwork(containerId);
@@ -2100,6 +2106,9 @@ export class UnconfiguredProvider implements VirtualizationProvider {
   async readContainerState(): Promise<string> {
     throw this.err();
   }
+  async changeRootPassword(): Promise<void> {
+    throw this.err();
+  }
   async getContainerNetwork(): Promise<ContainerNetworkInfo> {
     throw this.err();
   }
@@ -2161,5 +2170,50 @@ export function getProvider(): VirtualizationProvider {
     return new LocalLxcProvider();
   } catch {
     return new UnconfiguredProvider();
+  }
+}
+
+export async function changeContainerRootPassword(containerId: string, password: string): Promise<void> {
+  validateContainerId(containerId);
+  if (!password || typeof password !== "string" || password.length < 8 || password.length > 128) {
+    throw new ProviderError("INVALID_PASSWORD", "Password must be between 8 and 128 characters.", 400);
+  }
+  if (!(await containerExistsOnHost(containerId))) {
+    throw new ProviderError("NOT_FOUND", "Container does not exist on the host.", 404);
+  }
+
+  const hash = sha512Crypt(password);
+  const days = Math.floor(Date.now() / 86400000);
+  const rootfs = containerRootfsPath(containerId);
+  const shadowPath = path.join(rootfs, "etc", "shadow");
+
+  if (!fs.existsSync(shadowPath)) {
+    throw new ProviderError("SHADOW_NOT_FOUND", "Shadow database not found in container root filesystem.", 500);
+  }
+
+  try {
+    const content = fs.readFileSync(shadowPath, "utf8");
+    const lines = content.split("\n");
+    let found = false;
+    const newLines = lines.map((line) => {
+      if (line.startsWith("root:")) {
+        found = true;
+        return `root:${hash}:${days}:0:99999:7:::`;
+      }
+      return line;
+    });
+    if (!found) {
+      newLines.unshift(`root:${hash}:${days}:0:99999:7:::`);
+    }
+    const tmp = `${shadowPath}.kct_tmp_${Date.now()}`;
+    fs.writeFileSync(tmp, newLines.join("\n"), { mode: 0o640 });
+    fs.renameSync(tmp, shadowPath);
+  } catch (err) {
+    if (err instanceof ProviderError) throw err;
+    throw new ProviderError(
+      "PASSWORD_UPDATE_FAILED",
+      `Failed to write shadow file: ${err instanceof Error ? err.message : String(err)}`,
+      500
+    );
   }
 }

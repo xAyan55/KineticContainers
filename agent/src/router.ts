@@ -19,6 +19,7 @@ import {
   waitForState,
   AgentError,
   getContainerNetwork,
+  changeContainerRootPassword,
 } from "./services/lxc.js";
 import {
   applyResourceLimits,
@@ -309,6 +310,18 @@ export function createRequestHandler(config: AgentConfig) {
           await runLxc("lxc-start", ["-n", id], { timeoutMs: 60000 });
           await waitForState(id, "RUNNING", 60);
           sendJson(res, 200, { data: { ok: true, status: "running" } });
+          return;
+        }
+
+        // POST /v1/containers/:id/password
+        if (method === "POST" && subpath === "/password") {
+          if (!(await containerExists(id))) throw new AgentError("NOT_FOUND", "Container not found.", 404);
+          const body = await readJsonBody<{ password?: string }>(req);
+          if (!body.password || typeof body.password !== "string" || body.password.length < 8 || body.password.length > 128) {
+            throw new AgentError("INVALID_PASSWORD", "Password must be between 8 and 128 characters.", 400);
+          }
+          await changeContainerRootPassword(id, body.password);
+          sendJson(res, 200, { data: { ok: true, message: "Root password changed successfully." } });
           return;
         }
 

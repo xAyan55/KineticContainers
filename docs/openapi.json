@@ -4539,6 +4539,484 @@
         }
       }
     },
+    "/api/v1/instances/:id/password": {
+      "post": {
+        "operationId": "changeInstancePassword",
+        "summary": "Change the root password inside the container.",
+        "description": "Change the root password of the container directly in its shadow database. Works whether the container is running or stopped.",
+        "tags": [
+          "Instances"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "success": {
+                          "type": "boolean"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Infrastructure operation failed on the host.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Infrastructure operation failed on the host.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:settings:write",
+        "x-scope-description": "Rename instances and update instance metadata.",
+        "x-sensitive": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 128
+                  }
+                }
+              },
+              "example": {
+                "password": "SuperSecretPassword123!"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/instances/:id/reinstall": {
+      "post": {
+        "operationId": "reinstallInstance",
+        "summary": "Reinstall the operating system with a supported template.",
+        "description": "Reinstall the operating system of the instance. Destroys the existing container and provisions a fresh container with the specified template while preserving allocated resources.",
+        "tags": [
+          "Instances"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "instance": {
+                          "$ref": "#/components/schemas/Instance"
+                        },
+                        "live": {
+                          "$ref": "#/components/schemas/LiveState"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error with field-level details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Validation error with field-level details.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, malformed, expired, or revoked API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Missing, malformed, expired, or revoked API key.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Insufficient scope, IP restriction, or administrator role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Insufficient scope, IP restriction, or administrator role.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found (or not visible to this caller).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Resource not found (or not visible to this caller).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict with the current state of the resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Conflict with the current state of the resource.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Rate limit exceeded (see RateLimit-* and Retry-After headers).",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error; no stack traces are returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Unexpected server error; no stack traces are returned.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Infrastructure operation failed on the host.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Infrastructure operation failed on the host.",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "$ref": "#/components/schemas/ErrorObject"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-scope": "instances:create",
+        "x-scope-description": "Provision new containers through the real virtualization provider.",
+        "x-sensitive": true,
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Identifier of the resource.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "template"
+                ],
+                "properties": {
+                  "template": {
+                    "type": "string",
+                    "description": "Supported OS template."
+                  },
+                  "root_password": {
+                    "type": "string",
+                    "minLength": 8,
+                    "maxLength": 128,
+                    "description": "Optional initial root password."
+                  }
+                }
+              },
+              "example": {
+                "template": "ubuntu-24.04",
+                "root_password": "NewRootPassword123!"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates": {
       "get": {
         "operationId": "listTemplates",

@@ -100,6 +100,9 @@ export class UnconfiguredRemoteProvider implements VirtualizationProvider {
   readContainerState(): Promise<string> {
     throw this.err();
   }
+  changeRootPassword(): Promise<void> {
+    throw this.err();
+  }
   getContainerNetwork(): Promise<ContainerNetworkInfo> {
     throw this.err();
   }

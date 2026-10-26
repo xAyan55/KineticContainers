@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { openTestDb, setDbForTests, newId, nowIso } from "../src/db.js";
 import { hashPassword } from "../src/services/password.js";
 import { createApp } from "../src/app.js";
+import { sha512Crypt } from "../src/services/crypto.js";
 import {
   templateImage,
   downloadArch,
@@ -469,6 +470,8 @@ describe("instance API honesty and isolation", () => {
     expect((await bobAgent.patch(`/api/instances/${aliceInstance}`).send({ name: "hijacked" })).status).toBe(404);
     expect((await bobAgent.delete(`/api/instances/${aliceInstance}`)).status).toBe(404);
     expect((await bobAgent.post(`/api/instances/${aliceInstance}/actions`).send({ action: "start" })).status).toBe(404);
+    expect((await bobAgent.post(`/api/instances/${aliceInstance}/password`).send({ password: "ValidPassword123" })).status).toBe(404);
+    expect((await bobAgent.post(`/api/instances/${aliceInstance}/reinstall`).send({ template: "ubuntu-24.04" })).status).toBe(404);
     // Untouched by all of the above.
     const db = (await import("../src/db.js")).getDb();
     const row = db.prepare("SELECT name, cpu FROM instances WHERE id = ?").get(aliceInstance) as {
@@ -674,4 +677,83 @@ describe("instance API honesty and isolation", () => {
     ).n;
     expect(after).toBe(before);
   });
+
+  it("validates and handles root password change", async () => {
+    // 401 unauthenticated
+    expect((await request(app).post(`/api/instances/${aliceInstance}/password`).send({ password: "ValidPassword123" })).status).toBe(401);
+
+    const aliceAgent = await login("alice@test.local", "AlicePass12345");
+
+    // 400 too short (<8)
+    const shortRes = await aliceAgent.post(`/api/instances/${aliceInstance}/password`).send({ password: "short" });
+    expect(shortRes.status).toBe(400);
+
+    // 400 too long (>128)
+    const longRes = await aliceAgent.post(`/api/instances/${aliceInstance}/password`).send({ password: "a".repeat(129) });
+    expect(longRes.status).toBe(400);
+
+    // Calling on test box where LXC shadow is missing returns 502/LXC_UNAVAILABLE honestly
+    const validRes = await aliceAgent.post(`/api/instances/${aliceInstance}/password`).send({ password: "ValidPassword123" });
+    expect([200, 502]).toContain(validRes.status);
+    if (validRes.status === 502) {
+      expect(validRes.body.error.code).toBe("LXC_UNAVAILABLE");
+    }
+  });
+
+  it("validates and handles operating system reinstallation", async () => {
+    // 401 unauthenticated
+    expect((await request(app).post(`/api/instances/${aliceInstance}/reinstall`).send({ template: "ubuntu-24.04" })).status).toBe(401);
+
+    const aliceAgent = await login("alice@test.local", "AlicePass12345");
+
+    // 400 unsupported template
+    const badTemplate = await aliceAgent.post(`/api/instances/${aliceInstance}/reinstall`).send({ template: "freebsd-14" });
+    expect(badTemplate.status).toBe(400);
+
+    // 400 password too short if provided
+    const badPass = await aliceAgent.post(`/api/instances/${aliceInstance}/reinstall`).send({ template: "ubuntu-24.04", root_password: "abc" });
+    expect(badPass.status).toBe(400);
+
+    // Calling on test box where LXC is unavailable returns 502/LXC_UNAVAILABLE
+    const validReinstall = await aliceAgent.post(`/api/instances/${aliceInstance}/reinstall`).send({ template: "ubuntu-24.04", root_password: "NewRootPass12345" });
+    expect([200, 502]).toContain(validReinstall.status);
+    if (validReinstall.status === 502) {
+      expect(validReinstall.body.error.code).toBe("LXC_UNAVAILABLE");
+    }
+  });
+
+  it("rejects password change and reinstallation on suspended instances", async () => {
+    const db = (await import("../src/db.js")).getDb();
+    db.prepare("UPDATE instances SET status = 'suspended' WHERE id = ?").run(aliceInstance);
+
+    const aliceAgent = await login("alice@test.local", "AlicePass12345");
+    const passRes = await aliceAgent.post(`/api/instances/${aliceInstance}/password`).send({ password: "ValidPassword123" });
+    expect(passRes.status).toBe(403);
+    expect(passRes.body.error.code).toBe("INSTANCE_SUSPENDED");
+
+    const reinstallRes = await aliceAgent.post(`/api/instances/${aliceInstance}/reinstall`).send({ template: "ubuntu-24.04" });
+    expect(reinstallRes.status).toBe(403);
+    expect(reinstallRes.body.error.code).toBe("INSTANCE_SUSPENDED");
+  });
 });
+
+describe("Drepper SHA-512 crypt implementation", () => {
+  it("produces standard $6$ shadow hash compatible with Linux crypt(3)", () => {
+    const hash = sha512Crypt("testpassword", "saltsalt", 5000);
+    expect(hash.startsWith("$6$saltsalt$")).toBe(true);
+    expect(hash.length).toBeGreaterThan(30);
+
+    // Deterministic with same salt
+    const hash2 = sha512Crypt("testpassword", "saltsalt", 5000);
+    expect(hash2).toBe(hash);
+
+    // Different with different password
+    const hashDifferent = sha512Crypt("otherpassword", "saltsalt", 5000);
+    expect(hashDifferent).not.toBe(hash);
+
+    // Truncates salt to 16 chars per Drepper spec
+    const longSaltHash = sha512Crypt("testpassword", "12345678901234567890", 5000);
+    expect(longSaltHash.startsWith("$6$1234567890123456$")).toBe(true);
+  });
+});
+

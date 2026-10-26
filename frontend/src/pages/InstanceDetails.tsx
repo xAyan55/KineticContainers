@@ -12,6 +12,12 @@ import {
   Square,
   StickyNote,
   Terminal as TerminalIcon,
+  Key,
+  Lock,
+  Eye,
+  EyeOff,
+  AlertTriangle,
+  Check,
 } from "lucide-react";
 import { ApiError, api, apiBase, type Instance } from "@/lib/api";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -846,6 +852,13 @@ export function NetworkTab({ detail }: { detail: InstanceDetail }) {
   );
 }
 
+const TEMPLATE_NAMES: Record<string, string> = {
+  "ubuntu-24.04": "Ubuntu 24.04 LTS (Noble)",
+  "ubuntu-22.04": "Ubuntu 22.04 LTS (Jammy)",
+  "debian-12": "Debian 12 (Bookworm)",
+  "alpine-3.20": "Alpine Linux 3.20 (Minimal)",
+};
+
 export function SettingsTab({
   detail,
   onRefresh,
@@ -869,6 +882,98 @@ export function SettingsTab({
   const [suspending, setSuspending] = React.useState(false);
   const [confirmSuspend, setConfirmSuspend] = React.useState(false);
   const suspended = i.status === "suspended";
+
+  // Root Password state
+  const [rootPassword, setRootPassword] = React.useState("");
+  const [confirmRootPassword, setConfirmRootPassword] = React.useState("");
+  const [showRootPassword, setShowRootPassword] = React.useState(false);
+  const [savingPassword, setSavingPassword] = React.useState(false);
+
+  // OS Reinstall state
+  const [templates, setTemplates] = React.useState<string[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = React.useState(i.template ?? "ubuntu-22.04");
+  const [reinstallPassword, setReinstallPassword] = React.useState("");
+  const [confirmReinstallPassword, setConfirmReinstallPassword] = React.useState("");
+  const [showReinstallPassword, setShowReinstallPassword] = React.useState(false);
+  const [confirmWipe, setConfirmWipe] = React.useState(false);
+  const [reinstalling, setReinstalling] = React.useState(false);
+  const [showReinstallDialog, setShowReinstallDialog] = React.useState(false);
+
+  React.useEffect(() => {
+    api.get<{ templates: string[] }>("/api/templates")
+      .then((res) => {
+        if (res.templates && res.templates.length > 0) {
+          setTemplates(res.templates);
+          if (!res.templates.includes(selectedTemplate)) {
+            setSelectedTemplate(res.templates[0]);
+          }
+        }
+      })
+      .catch(() => {
+        setTemplates(["ubuntu-24.04", "ubuntu-22.04", "debian-12", "alpine-3.20"]);
+      });
+  }, []);
+
+  const handlePasswordSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (rootPassword.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (rootPassword !== confirmRootPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setSavingPassword(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await api.post(`/api/instances/${i.id}/password`, { password: rootPassword });
+      setNotice("Root password updated successfully.");
+      setRootPassword("");
+      setConfirmRootPassword("");
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not update root password.");
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
+  const handleReinstallSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (!confirmWipe) {
+      setError("Please confirm that you understand this will permanently erase all data on the VPS.");
+      return;
+    }
+    if (reinstallPassword && reinstallPassword.length < 8) {
+      setError("New root password must be at least 8 characters.");
+      return;
+    }
+    if (reinstallPassword && reinstallPassword !== confirmReinstallPassword) {
+      setError("Reinstall passwords do not match.");
+      return;
+    }
+    setReinstalling(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await api.post(`/api/instances/${i.id}/reinstall`, {
+        template: selectedTemplate,
+        root_password: reinstallPassword || undefined,
+      });
+      setNotice(`Operating system successfully reinstalled as ${selectedTemplate}.`);
+      setShowReinstallDialog(false);
+      setConfirmWipe(false);
+      setReinstallPassword("");
+      setConfirmReinstallPassword("");
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Reinstallation failed.");
+    } finally {
+      setReinstalling(false);
+    }
+  };
 
   const setSuspended = async (lift: boolean): Promise<void> => {
     setSuspending(true);
@@ -925,12 +1030,201 @@ export function SettingsTab({
           {notice}
         </div>
       ) : null}
-      {!isAdmin ? (
-        <Card>
-          <h2 className="mb-1 text-sm font-semibold text-primary">Settings</h2>
-          <p className="text-sm text-muted">Only administrators can rename or delete VPS instances. You can start, stop, restart, and use the console on VPS assigned to you.</p>
-        </Card>
-      ) : null}
+
+      {/* Root Password Card */}
+      <Card>
+        <div className="flex items-center gap-2 mb-1">
+          <Key className="h-4 w-4 text-muted" />
+          <h2 className="text-sm font-semibold text-primary">Root Password</h2>
+        </div>
+        <p className="mb-4 text-xs text-muted">
+          Change the root password for console and SSH access. Works whether the VPS is running or stopped.
+        </p>
+        <form onSubmit={(e) => void handlePasswordSubmit(e)} className="flex max-w-md flex-col gap-3">
+          <div>
+            <Label htmlFor="root-pw">New root password</Label>
+            <div className="relative">
+              <Input
+                id="root-pw"
+                type={showRootPassword ? "text" : "password"}
+                value={rootPassword}
+                onChange={(e) => setRootPassword(e.target.value)}
+                required
+                minLength={8}
+                maxLength={128}
+                placeholder="••••••••••••"
+                disabled={savingPassword || suspended}
+              />
+              <button
+                type="button"
+                onClick={() => setShowRootPassword(!showRootPassword)}
+                className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted hover:text-primary transition-colors cursor-pointer"
+                tabIndex={-1}
+                aria-label={showRootPassword ? "Hide password" : "Show password"}
+              >
+                {showRootPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <div>
+            <Label htmlFor="confirm-root-pw">Confirm root password</Label>
+            <Input
+              id="confirm-root-pw"
+              type={showRootPassword ? "text" : "password"}
+              value={confirmRootPassword}
+              onChange={(e) => setConfirmRootPassword(e.target.value)}
+              required
+              minLength={8}
+              maxLength={128}
+              placeholder="••••••••••••"
+              disabled={savingPassword || suspended}
+            />
+          </div>
+          <div>
+            <Button type="submit" disabled={savingPassword || suspended || !rootPassword}>
+              {savingPassword ? "Updating password…" : "Update root password"}
+            </Button>
+          </div>
+        </form>
+      </Card>
+
+      {/* Reinstall Operating System Card */}
+      <Card>
+        <div className="flex items-center gap-2 mb-1">
+          <RotateCcw className="h-4 w-4 text-muted" />
+          <h2 className="text-sm font-semibold text-primary">Reinstall Operating System</h2>
+        </div>
+        <p className="mb-4 text-xs text-muted">
+          Wipe the container filesystem and deploy a clean operating system template.
+        </p>
+
+        {!showReinstallDialog ? (
+          <div>
+            <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3.5 mb-4 text-xs text-amber-200/90 flex gap-2.5 items-start">
+              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-amber-300">Data Loss Warning:</span> Reinstalling will permanently delete all files, configurations, and installed packages on this VPS. IP addresses and resource allocations remain preserved.
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => {
+                setShowReinstallDialog(true);
+                setConfirmWipe(false);
+              }}
+              disabled={suspended}
+            >
+              Reinstall Operating System…
+            </Button>
+          </div>
+        ) : (
+          <form onSubmit={(e) => void handleReinstallSubmit(e)} className="flex max-w-lg flex-col gap-4">
+            <div className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-300 flex gap-2.5 items-start">
+              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-rose-200">Destructive Operation:</span> All data inside <span className="font-mono text-primary">{i.container_id}</span> will be permanently erased.
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="reinstall-tpl">Target Operating System</Label>
+              <select
+                id="reinstall-tpl"
+                value={selectedTemplate}
+                onChange={(e) => setSelectedTemplate(e.target.value)}
+                className="kct-input w-full cursor-pointer"
+                disabled={reinstalling}
+              >
+                {templates.map((tpl) => (
+                  <option key={tpl} value={tpl}>
+                    {TEMPLATE_NAMES[tpl] ?? tpl}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <Label htmlFor="reinstall-pw">New root password (optional)</Label>
+              <div className="relative">
+                <Input
+                  id="reinstall-pw"
+                  type={showReinstallPassword ? "text" : "password"}
+                  value={reinstallPassword}
+                  onChange={(e) => setReinstallPassword(e.target.value)}
+                  minLength={8}
+                  maxLength={128}
+                  placeholder="Set password for new OS (minimum 8 chars)"
+                  disabled={reinstalling}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowReinstallPassword(!showReinstallPassword)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted hover:text-primary transition-colors cursor-pointer"
+                  tabIndex={-1}
+                  aria-label={showReinstallPassword ? "Hide password" : "Show password"}
+                >
+                  {showReinstallPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            {reinstallPassword ? (
+              <div>
+                <Label htmlFor="confirm-reinstall-pw">Confirm new root password</Label>
+                <Input
+                  id="confirm-reinstall-pw"
+                  type={showReinstallPassword ? "text" : "password"}
+                  value={confirmReinstallPassword}
+                  onChange={(e) => setConfirmReinstallPassword(e.target.value)}
+                  minLength={8}
+                  maxLength={128}
+                  placeholder="Repeat new password"
+                  disabled={reinstalling}
+                />
+              </div>
+            ) : null}
+
+            <div className="flex items-start gap-2.5 pt-1">
+              <input
+                id="confirm-wipe-checkbox"
+                type="checkbox"
+                checked={confirmWipe}
+                onChange={(e) => setConfirmWipe(e.target.checked)}
+                className="h-4 w-4 mt-0.5 accent-white cursor-pointer"
+                disabled={reinstalling}
+              />
+              <Label htmlFor="confirm-wipe-checkbox" className="text-xs text-muted cursor-pointer leading-relaxed">
+                I understand that this action is irreversible and will permanently wipe all existing files, databases, and configuration on this server.
+              </Label>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <Button
+                type="submit"
+                variant="danger"
+                disabled={reinstalling || !confirmWipe}
+              >
+                {reinstalling ? "Reinstalling OS (may take up to a minute)…" : `Confirm Reinstall ${selectedTemplate}`}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setShowReinstallDialog(false);
+                  setConfirmWipe(false);
+                  setReinstallPassword("");
+                  setConfirmReinstallPassword("");
+                }}
+                disabled={reinstalling}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
+      </Card>
+
       {isAdmin ? (
       <Card>
         <h2 className="mb-4 text-sm font-semibold text-primary">Display name</h2>

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 import type { ContainerInfo, ContainerNetworkInfo, ContainerStatus, CreateContainerRequest } from "../types.js";
 
 const TIMEOUT_MS = 15000;
@@ -386,5 +387,151 @@ export async function destroyQuietly(containerId: string): Promise<void> {
     }
   } catch {
     // best-effort cleanup
+  }
+}
+
+const B64_CHARS = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+function b64From24Bit(b2: number, b1: number, b0: number, size: number): string {
+  let v = (b2 << 16) | (b1 << 8) | b0;
+  let out = "";
+  while (size-- > 0) {
+    out += B64_CHARS[v & 0x3f];
+    v >>= 6;
+  }
+  return out;
+}
+
+export function sha512Crypt(key: string, salt?: string, rounds = 5000): string {
+  const cleanSalt = (
+    salt ||
+    crypto.randomBytes(12).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)
+  ).slice(0, 16);
+  const keyBuf = Buffer.from(key, "utf8");
+  const saltBuf = Buffer.from(cleanSalt, "utf8");
+
+  const ctxB = crypto.createHash("sha512");
+  ctxB.update(keyBuf);
+  ctxB.update(saltBuf);
+  ctxB.update(keyBuf);
+  const altResult = ctxB.digest();
+
+  const ctxA = crypto.createHash("sha512");
+  ctxA.update(keyBuf);
+  ctxA.update(saltBuf);
+
+  let cnt = keyBuf.length;
+  while (cnt > 64) {
+    ctxA.update(altResult);
+    cnt -= 64;
+  }
+  ctxA.update(altResult.subarray(0, cnt));
+
+  cnt = keyBuf.length;
+  while (cnt > 0) {
+    if ((cnt & 1) !== 0) {
+      ctxA.update(altResult);
+    } else {
+      ctxA.update(keyBuf);
+    }
+    cnt >>= 1;
+  }
+  let pResult = ctxA.digest();
+
+  const ctxP = crypto.createHash("sha512");
+  for (let i = 0; i < keyBuf.length; i++) ctxP.update(keyBuf);
+  const pBytes = ctxP.digest();
+  const pSeq = Buffer.alloc(keyBuf.length);
+  for (let i = 0; i < keyBuf.length; i++) pSeq[i] = pBytes[i % 64];
+
+  const ctxS = crypto.createHash("sha512");
+  for (let i = 0; i < 16 + pResult[0]; i++) ctxS.update(saltBuf);
+  const sBytes = ctxS.digest();
+  const sSeq = Buffer.alloc(cleanSalt.length);
+  for (let i = 0; i < cleanSalt.length; i++) sSeq[i] = sBytes[i % 64];
+
+  for (let i = 0; i < rounds; i++) {
+    const ctx = crypto.createHash("sha512");
+    if ((i & 1) !== 0) ctx.update(pSeq);
+    else ctx.update(pResult);
+
+    if (i % 3 !== 0) ctx.update(sSeq);
+    if (i % 7 !== 0) ctx.update(pSeq);
+
+    if ((i & 1) !== 0) ctx.update(pResult);
+    else ctx.update(pSeq);
+
+    pResult = ctx.digest();
+  }
+
+  let encoded = "";
+  encoded += b64From24Bit(pResult[0], pResult[21], pResult[42], 4);
+  encoded += b64From24Bit(pResult[22], pResult[43], pResult[1], 4);
+  encoded += b64From24Bit(pResult[44], pResult[2], pResult[23], 4);
+  encoded += b64From24Bit(pResult[3], pResult[24], pResult[45], 4);
+  encoded += b64From24Bit(pResult[25], pResult[46], pResult[4], 4);
+  encoded += b64From24Bit(pResult[47], pResult[5], pResult[26], 4);
+  encoded += b64From24Bit(pResult[6], pResult[27], pResult[48], 4);
+  encoded += b64From24Bit(pResult[28], pResult[49], pResult[7], 4);
+  encoded += b64From24Bit(pResult[50], pResult[8], pResult[29], 4);
+  encoded += b64From24Bit(pResult[9], pResult[30], pResult[51], 4);
+  encoded += b64From24Bit(pResult[31], pResult[52], pResult[10], 4);
+  encoded += b64From24Bit(pResult[53], pResult[11], pResult[32], 4);
+  encoded += b64From24Bit(pResult[12], pResult[33], pResult[54], 4);
+  encoded += b64From24Bit(pResult[34], pResult[55], pResult[13], 4);
+  encoded += b64From24Bit(pResult[56], pResult[14], pResult[35], 4);
+  encoded += b64From24Bit(pResult[15], pResult[36], pResult[57], 4);
+  encoded += b64From24Bit(pResult[37], pResult[58], pResult[16], 4);
+  encoded += b64From24Bit(pResult[59], pResult[17], pResult[38], 4);
+  encoded += b64From24Bit(pResult[18], pResult[39], pResult[60], 4);
+  encoded += b64From24Bit(pResult[40], pResult[61], pResult[19], 4);
+  encoded += b64From24Bit(pResult[62], pResult[20], pResult[41], 4);
+  encoded += b64From24Bit(0, 0, pResult[63], 2);
+
+  return `$6$${cleanSalt}$${encoded}`;
+}
+
+export async function changeContainerRootPassword(containerId: string, password: string): Promise<void> {
+  validateContainerId(containerId);
+  if (!password || typeof password !== "string" || password.length < 8 || password.length > 128) {
+    throw new AgentError("INVALID_PASSWORD", "Password must be between 8 and 128 characters.", 400);
+  }
+  if (!(await containerExists(containerId))) {
+    throw new AgentError("NOT_FOUND", "Container does not exist on the host.", 404);
+  }
+
+  const hash = sha512Crypt(password);
+  const days = Math.floor(Date.now() / 86400000);
+  const rootfs = containerRootfsPath(containerId);
+  const shadowPath = path.join(rootfs, "etc", "shadow");
+
+  if (!fs.existsSync(shadowPath)) {
+    throw new AgentError("SHADOW_NOT_FOUND", "Shadow database not found in container root filesystem.", 500);
+  }
+
+  try {
+    const content = fs.readFileSync(shadowPath, "utf8");
+    const lines = content.split("\n");
+    let found = false;
+    const newLines = lines.map((line) => {
+      if (line.startsWith("root:")) {
+        found = true;
+        return `root:${hash}:${days}:0:99999:7:::`;
+      }
+      return line;
+    });
+    if (!found) {
+      newLines.unshift(`root:${hash}:${days}:0:99999:7:::`);
+    }
+    const tmp = `${shadowPath}.kct_tmp_${Date.now()}`;
+    fs.writeFileSync(tmp, newLines.join("\n"), { mode: 0o640 });
+    fs.renameSync(tmp, shadowPath);
+  } catch (err) {
+    if (err instanceof AgentError) throw err;
+    throw new AgentError(
+      "PASSWORD_UPDATE_FAILED",
+      `Failed to write shadow file: ${err instanceof Error ? err.message : String(err)}`,
+      500
+    );
   }
 }

@@ -760,6 +760,43 @@ const DOCS: Record<string, DocEntry> = {
     }),
     errors: [400, 403, 404, 409, 502],
   },
+  changeInstancePassword: {
+    description: "Change the root password of the container directly in its shadow database. Works whether the container is running or stopped.",
+    requestBody: {
+      required: true,
+      schema: {
+        type: "object",
+        required: ["password"],
+        properties: { password: { type: "string", minLength: 8, maxLength: 128 } },
+      },
+      example: { password: "SuperSecretPassword123!" },
+    },
+    successSchema: envelope({
+      type: "object",
+      properties: { success: { type: "boolean" }, message: { type: "string" } },
+    }),
+    errors: [400, 403, 404, 409, 502],
+  },
+  reinstallInstance: {
+    description: "Reinstall the operating system of the instance. Destroys the existing container and provisions a fresh container with the specified template while preserving allocated resources.",
+    requestBody: {
+      required: true,
+      schema: {
+        type: "object",
+        required: ["template"],
+        properties: {
+          template: { type: "string", description: "Supported OS template." },
+          root_password: { type: "string", minLength: 8, maxLength: 128, description: "Optional initial root password." },
+        },
+      },
+      example: { template: "ubuntu-24.04", root_password: "NewRootPassword123!" },
+    },
+    successSchema: envelope({
+      type: "object",
+      properties: { instance: ref("Instance"), live: ref("LiveState") },
+    }),
+    errors: [400, 403, 404, 409, 502],
+  },
   listTemplates: {
     description: "Operating-system templates the local provider can provision.",
     successSchema: envelope({ type: "object", properties: { templates: { type: "array", items: { type: "string" } } } }),
