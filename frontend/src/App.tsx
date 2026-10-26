@@ -16,6 +16,7 @@ import { AdminApiKeysPage } from "@/pages/admin/ApiKeys";
 import { AdminInstancesPage } from "@/pages/admin/Instances";
 import { AdminInstanceDetailPage } from "@/pages/admin/InstanceDetail";
 import { AdminSettingsPage } from "@/pages/admin/Settings";
+import { FinanceBentoPage } from "@/pages/FinanceBentoPage";
 import { NotFoundPage } from "@/pages/NotFound";
 import { api } from "@/lib/api";
 import { setFavicon, useBranding } from "@/lib/branding";
@@ -69,6 +70,16 @@ export function App(): React.JSX.Element {
               <RequireAuth>
                 <AppShell appName={appName}>
                   <ProfilePage />
+                </AppShell>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/finance"
+            element={
+              <RequireAuth>
+                <AppShell appName={appName}>
+                  <FinanceBentoPage />
                 </AppShell>
               </RequireAuth>
             }
