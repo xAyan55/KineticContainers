@@ -301,6 +301,12 @@ export function AdminOverviewPage(): React.JSX.Element {
 
   React.useEffect(() => {
     void loadData();
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadData();
+      }
+    }, 5000);
+    return () => clearInterval(interval);
   }, [loadData]);
 
   const handleRefresh = () => {
@@ -647,10 +653,11 @@ export function AdminOverviewPage(): React.JSX.Element {
         {/* Header Bar */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-primary flex items-center gap-2">
+            <h1 className="text-xl font-bold tracking-tight text-primary flex items-center gap-2.5">
               <span>System Overview</span>
-              <span className="text-xs font-normal font-mono text-muted">
-                Synced {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              <span className="text-xs font-normal font-mono text-muted inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface border border-border">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                <span>Live · {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
               </span>
             </h1>
             <p className="mt-0.5 text-xs text-muted">
