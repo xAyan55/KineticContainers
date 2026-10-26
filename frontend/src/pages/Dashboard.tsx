@@ -22,6 +22,7 @@ import {
 import { useAuth } from "@/features/auth/AuthContext";
 import { ApiError, api, type Instance } from "@/lib/api";
 import { Card, EmptyState, InlineAlert, PageHeader, StatusBadge } from "@/components/ui/primitives";
+import { LiveFleetOverview } from "@/components/ui/live-fleet-overview";
 import { cn } from "@/lib/utils";
 
 function formatDate(iso: string): string {
@@ -180,61 +181,9 @@ export function DashboardPage(): React.JSX.Element {
         </div>
       ) : null}
 
-      {/* KPI Overview Strip */}
+      {/* Live Fleet Overview Strip (features-8 cards with complete realtime data) */}
       {instances && instances.length > 0 ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="kct-card flex flex-col justify-between p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium uppercase tracking-wider text-muted">Instances</span>
-              <Server className="h-4 w-4 text-muted" aria-hidden="true" />
-            </div>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="font-mono text-2xl font-bold tracking-tight text-primary">{stats.total}</span>
-              <span className="text-xs text-muted">total</span>
-            </div>
-            <div className="mt-1 flex items-center gap-1.5 text-xs text-muted">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              <span>{stats.running} running</span>
-              <span className="text-mid">·</span>
-              <span>{stats.stopped} stopped</span>
-            </div>
-          </div>
-
-          <div className="kct-card flex flex-col justify-between p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium uppercase tracking-wider text-muted">vCPU Power</span>
-              <Cpu className="h-4 w-4 text-muted" aria-hidden="true" />
-            </div>
-            <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="font-mono text-2xl font-bold tracking-tight text-primary">{stats.cpu}</span>
-              <span className="text-xs text-muted">cores</span>
-            </div>
-            <p className="mt-1 text-xs text-muted">Allocated compute cores</p>
-          </div>
-
-          <div className="kct-card flex flex-col justify-between p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium uppercase tracking-wider text-muted">Memory</span>
-              <MemoryStick className="h-4 w-4 text-muted" aria-hidden="true" />
-            </div>
-            <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="font-mono text-2xl font-bold tracking-tight text-primary">{formatMemory(stats.memoryMb)}</span>
-            </div>
-            <p className="mt-1 text-xs text-muted">Allocated RAM footprint</p>
-          </div>
-
-          <div className="kct-card flex flex-col justify-between p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium uppercase tracking-wider text-muted">Storage</span>
-              <HardDrive className="h-4 w-4 text-muted" aria-hidden="true" />
-            </div>
-            <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="font-mono text-2xl font-bold tracking-tight text-primary">{stats.storageGb}</span>
-              <span className="text-xs text-muted">GB</span>
-            </div>
-            <p className="mt-1 text-xs text-muted">Configured root storage</p>
-          </div>
-        </div>
+        <LiveFleetOverview stats={stats} instances={instances} />
       ) : null}
 
       {/* Main Content Area */}
