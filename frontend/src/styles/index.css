@@ -153,3 +153,20 @@ body {
 .kct-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Interactive cards with subtle border & background transitions */
+.kct-card-interactive {
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.kct-card-interactive:hover {
+  border-color: #383838;
+  background-color: #141414;
+}
+
+/* Row hover highlight for tables */
+.kct-table tbody tr {
+  transition: background-color 100ms ease;
+}
+.kct-table tbody tr:hover td {
+  background-color: rgba(255, 255, 255, 0.025);
+}

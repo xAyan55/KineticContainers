@@ -43,35 +43,57 @@ export function FieldError({ message }: { message?: string }): React.JSX.Element
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  running: "border-highlight bg-raised text-primary",
+  running: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
   stopped: "border-border bg-surface text-muted",
-  starting: "border-mid bg-raised text-primary",
-  stopping: "border-mid bg-raised text-primary",
-  failed: "border-mid bg-raised text-primary",
+  starting: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  stopping: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  failed: "border-rose-500/30 bg-rose-500/10 text-rose-300",
   unknown: "border-border bg-surface text-muted",
-  active: "border-highlight bg-raised text-primary",
+  active: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
   disabled: "border-border bg-surface text-muted",
-  online: "border-highlight bg-raised text-primary",
+  online: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
   offline: "border-border bg-surface text-muted",
   unconfigured: "border-border bg-surface text-muted",
   unavailable: "border-border bg-surface text-muted",
-  error: "border-mid bg-raised text-primary",
+  error: "border-rose-500/30 bg-rose-500/10 text-rose-300",
   expired: "border-border bg-surface text-muted",
   revoked: "border-border bg-surface text-muted line-through",
-  missing: "border-mid bg-raised text-primary",
-  suspended: "border-mid bg-raised text-primary",
+  missing: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  suspended: "border-purple-500/30 bg-purple-500/10 text-purple-300",
 };
 
-export function StatusBadge({ status }: { status: string }): React.JSX.Element {
+const STATUS_DOTS: Record<string, string> = {
+  running: "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]",
+  online: "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]",
+  active: "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]",
+  starting: "bg-amber-400 animate-pulse",
+  stopping: "bg-amber-400 animate-pulse",
+  stopped: "bg-zinc-500",
+  offline: "bg-zinc-500",
+  disabled: "bg-zinc-600",
+  failed: "bg-rose-400 shadow-[0_0_6px_rgba(251,113,133,0.6)]",
+  error: "bg-rose-400 shadow-[0_0_6px_rgba(251,113,133,0.6)]",
+  suspended: "bg-purple-400 shadow-[0_0_6px_rgba(192,132,252,0.5)]",
+  missing: "bg-amber-400",
+  expired: "bg-zinc-600",
+  revoked: "bg-zinc-600",
+  unconfigured: "bg-zinc-600",
+  unavailable: "bg-zinc-600",
+};
+
+export function StatusBadge({ status, className }: { status: string; className?: string }): React.JSX.Element {
   const label = status.charAt(0).toUpperCase() + status.slice(1);
+  const dot = STATUS_DOTS[status] ?? "bg-zinc-500";
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium",
-        STATUS_STYLES[status] ?? STATUS_STYLES.unknown
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium tracking-tight",
+        STATUS_STYLES[status] ?? STATUS_STYLES.unknown,
+        className
       )}
     >
-      {label}
+      <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dot)} aria-hidden="true" />
+      <span>{label}</span>
     </span>
   );
 }
