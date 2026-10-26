@@ -13,6 +13,7 @@ import {
   StatusBadge,
 } from "@/components/ui/primitives";
 import { formatDateTime } from "@/pages/InstanceDetails";
+import { AdminFleetFeatures } from "@/components/ui/admin-fleet-features";
 import { cn } from "@/lib/utils";
 
 interface LiveState {
@@ -228,15 +229,7 @@ export function AdminInstancesPage(): React.JSX.Element {
       <InlineAlert message={error} />
 
       {stats ? (
-        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7" aria-label="Instance statistics">
-          <Stat label="Total managed" value={stats.total} />
-          <Stat label="Running (recorded)" value={stats.running} />
-          <Stat label="Stopped (recorded)" value={stats.stopped} />
-          <Stat label="Starting / stopping" value={stats.transitional} />
-          <Stat label="Failed" value={stats.failed} />
-          <Stat label="Suspended" value={stats.suspended} />
-          <Stat label="Unknown" value={stats.unknown + stats.other} />
-        </div>
+        <AdminFleetFeatures stats={stats} instances={instances ?? []} />
       ) : null}
       {integrityFlags.length > 0 ? (
         <div role="status" className="mb-4 flex items-start gap-2 rounded-md border border-mid bg-raised px-3 py-2 text-sm text-primary">

@@ -29,6 +29,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { FilesTab } from "@/pages/InstanceFiles";
+import { VpsDetailFeatures } from "@/components/ui/vps-detail-features";
 
 const LiveConsumptionCharts = React.lazy(() =>
   import("@/components/ui/live-consumption-chart").then((m) => ({ default: m.LiveConsumptionCharts }))
@@ -211,6 +212,10 @@ export function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onR
       {detail.live.exists === null ? (
         <InlineAlert message={detail.live.error ?? "Live host state is currently unavailable."} />
       ) : null}
+
+      {/* Hero Features Strip (features-8 cards with real VPS metrics) */}
+      <VpsDetailFeatures detail={detail} />
+
       <Card>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <Fact label="Status" value={<StatusBadge status={detail.live.exists ? (detail.live.status ?? "unknown") : "unknown"} />} />
