@@ -285,7 +285,14 @@ export function AdminInstanceDetailPage(): React.JSX.Element {
             <TabErrorBoundary key={tab}>
               {tab === "overview" && <OverviewTab detail={detail} onRefresh={refresh} />}
               {tab === "notes" && <NotesTab detail={detail} onRefresh={refresh} isAdmin />}
-              {tab === "console" && <ConsoleTab instanceId={detail.instance.id} />}
+              {tab === "console" && (
+                <ConsoleTab
+                  instanceId={detail.instance.id}
+                  instanceName={detail.instance.name}
+                  running={detail.live.exists ? detail.live.status === "running" : false}
+                  onRefreshInstance={refresh}
+                />
+              )}
               {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin />}
               {tab === "network" && <NetworkTab detail={detail} />}
               {tab === "files" && <FilesTab instanceId={detail.instance.id} />}

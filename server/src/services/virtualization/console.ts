@@ -169,6 +169,34 @@ export async function checkConsoleRunnable(row: Record<string, unknown>): Promis
 
 const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_PAYLOAD_BYTES = 16 * 1024;
+export const MAX_SESSIONS_PER_INSTANCE = Number(process.env.MAX_TERMINAL_SESSIONS_PER_INSTANCE ?? 8);
+
+const activeSessionsByInstance = new Map<string, Set<WebSocket>>();
+
+export function getActiveSessionCount(instanceId: string): number {
+  return activeSessionsByInstance.get(instanceId)?.size ?? 0;
+}
+
+function registerSession(instanceId: string, ws: WebSocket): boolean {
+  let set = activeSessionsByInstance.get(instanceId);
+  if (!set) {
+    set = new Set();
+    activeSessionsByInstance.set(instanceId, set);
+  }
+  if (set.size >= MAX_SESSIONS_PER_INSTANCE) {
+    return false;
+  }
+  set.add(ws);
+  return true;
+}
+
+function unregisterSession(instanceId: string, ws: WebSocket): void {
+  const set = activeSessionsByInstance.get(instanceId);
+  if (set) {
+    set.delete(ws);
+    if (set.size === 0) activeSessionsByInstance.delete(instanceId);
+  }
+}
 
 function send(ws: WebSocket, msg: Record<string, unknown>): void {
   if (ws.readyState === WebSocket.OPEN) {
@@ -217,38 +245,73 @@ function originAllowed(origin: string | undefined, host: string | undefined): bo
   return false;
 }
 
-function openConsole(ws: WebSocket, req: IncomingMessage, instanceId: string): void {
+function openConsole(ws: WebSocket, req: IncomingMessage, rawInstanceId: string): void {
   void (async () => {
+    const instanceId = decodeURIComponent(rawInstanceId);
     let session: ConsoleSession;
     try {
-      session = await authorizeConsole(req.headers.cookie, decodeURIComponent(instanceId));
+      session = await authorizeConsole(req.headers.cookie, instanceId);
     } catch (err) {
       const status = err instanceof ProviderError ? err.status : 500;
       closeWithError(ws, status === 401 ? 4401 : 4404, err instanceof Error ? err.message : "Unauthorized.");
       return;
     }
+
+    // Enforce session limit per instance
+    if (!registerSession(instanceId, ws)) {
+      closeWithError(
+        ws,
+        4429,
+        `Maximum concurrent terminal sessions reached for this VPS (limit: ${MAX_SESSIONS_PER_INSTANCE}). Please close an existing session before opening a new one.`
+      );
+      return;
+    }
+
+    let cleanedUp = false;
+    const cleanupSession = (): void => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      unregisterSession(instanceId, ws);
+    };
+
+    const parsedUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    const clientSessionId = parsedUrl.searchParams.get("session") || `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const initCols = Math.max(2, Math.min(500, Math.floor(Number(parsedUrl.searchParams.get("cols")) || 80)));
+    const initRows = Math.max(2, Math.min(500, Math.floor(Number(parsedUrl.searchParams.get("rows")) || 24)));
+
     const { user, row } = session;
     const nodeId = String(row.node_id ?? "local");
     const containerId = String(row.container_id);
+
+    ws.once("close", cleanupSession);
+    ws.once("error", cleanupSession);
+
     if (nodeId !== "local") {
       const { getProviderForNode } = await import("./providerRegistry.js");
       const provider = getProviderForNode(nodeId);
-      provider.openConsole(nodeId, containerId, ws, user, row.template as string | undefined);
+      provider.openConsole(nodeId, containerId, ws, user, row.template as string | undefined, {
+        session: clientSessionId,
+        cols: initCols,
+        rows: initRows,
+      });
       return;
     }
     let check: ConsoleCheck;
     try {
       check = await checkConsoleRunnable(row);
     } catch (err) {
+      cleanupSession();
       closeWithError(ws, 4502, err instanceof Error ? err.message : "Console check failed.");
       return;
     }
     if (!check.supported || !check.shell) {
+      cleanupSession();
       closeWithError(ws, 4501, check.reason ?? "Console unavailable.");
       return;
     }
     const pty = loadPty();
     if (!pty) {
+      cleanupSession();
       closeWithError(ws, 4501, "Console backend unavailable.");
       return;
     }
@@ -260,12 +323,13 @@ function openConsole(ws: WebSocket, req: IncomingMessage, instanceId: string): v
       const startCommand = `cd /root 2>/dev/null; exec ${shell}`;
       proc = pty.spawn("lxc-attach", ["-n", containerId, "--", shell, "-c", startCommand], {
         name: "xterm-256color",
-        cols: 80,
-        rows: 24,
+        cols: initCols,
+        rows: initRows,
         cwd: "/",
         env: { ...(process.env as Record<string, string>), TERM: "xterm-256color" },
       });
     } catch (err) {
+      cleanupSession();
       closeWithError(ws, 4502, err instanceof Error ? err.message : "Could not attach to the container.");
       return;
     }
@@ -275,7 +339,16 @@ function openConsole(ws: WebSocket, req: IncomingMessage, instanceId: string): v
       action: "instance.console_open",
       targetType: "instance",
       targetId: String(row.id),
-      detail: { container_id: containerId },
+      detail: { container_id: containerId, session_id: clientSessionId },
+    });
+
+    // Notify client the session is ready with shell metadata
+    send(ws, {
+      type: "ready",
+      sessionId: clientSessionId,
+      cols: initCols,
+      rows: initRows,
+      shell: check.shell,
     });
 
     let closed = false;
@@ -311,16 +384,21 @@ function openConsole(ws: WebSocket, req: IncomingMessage, instanceId: string): v
     };
 
     proc.onData((data: string) => {
+      // Backpressure protection: avoid unbounded memory buffer if client is stalled
+      if (ws.bufferedAmount > 1024 * 1024) {
+        return;
+      }
       send(ws, { type: "output", data });
     });
-    proc.onExit(() => {
-      send(ws, { type: "exit" });
+    proc.onExit((exit) => {
+      send(ws, { type: "exit", code: exit?.exitCode ?? 0 });
       if (idleTimer) clearTimeout(idleTimer);
       try {
         ws.close(1000, "session ended");
       } catch {
         /* ignore */
       }
+      cleanupSession();
     });
     ws.on("message", (raw: Buffer | string) => {
       let msg: { type?: string; data?: string; cols?: number; rows?: number };
@@ -344,11 +422,23 @@ function openConsole(ws: WebSocket, req: IncomingMessage, instanceId: string): v
         } catch {
           /* ignore */
         }
+      } else if (msg.type === "terminate") {
+        if (idleTimer) clearTimeout(idleTimer);
+        kill("SIGHUP");
+        try {
+          ws.close(1000, "terminated");
+        } catch {
+          /* ignore */
+        }
+        cleanupSession();
+      } else if (msg.type === "ping") {
+        send(ws, { type: "pong" });
       }
     });
     const onClose = (): void => {
       if (idleTimer) clearTimeout(idleTimer);
       kill();
+      cleanupSession();
     };
     ws.on("close", onClose);
     ws.on("error", onClose);

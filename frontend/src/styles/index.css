@@ -1,3 +1,6 @@
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -184,3 +187,31 @@ body {
 .kct-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* KineticCT Custom Terminal Styling */
+.kinetic-terminal-container .xterm {
+  padding: 6px 8px;
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.kinetic-terminal-container .xterm .xterm-viewport {
+  background-color: #000000 !important;
+  scrollbar-width: thin;
+  scrollbar-color: #303030 transparent;
+}
+
+.kinetic-terminal-container .xterm .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.kinetic-terminal-container .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #303030;
+  border-radius: 3px;
+}
+
+.kinetic-terminal-container .xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+

@@ -308,11 +308,14 @@ export class RemoteAgentProvider implements VirtualizationProvider {
     return this.request<ConsoleCheck>(`/v1/containers/${encodeURIComponent(containerId)}/console/check${q}`, "GET");
   }
 
-  openConsole(nodeId: string, containerId: string, clientWs: WebSocket, user: AuthUser, template?: string): void {
+  openConsole(nodeId: string, containerId: string, clientWs: WebSocket, user: AuthUser, template?: string, options?: { session?: string; cols?: number; rows?: number }): void {
     const wsUrl = new URL(this.baseUrl);
     wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
     wsUrl.pathname = `/v1/containers/${encodeURIComponent(containerId)}/console`;
     if (template) wsUrl.searchParams.set("template", template);
+    if (options?.session) wsUrl.searchParams.set("session", options.session);
+    if (options?.cols) wsUrl.searchParams.set("cols", String(options.cols));
+    if (options?.rows) wsUrl.searchParams.set("rows", String(options.rows));
     if (this.authToken) wsUrl.searchParams.set("token", this.authToken);
 
     const headers = this.buildHeaders();

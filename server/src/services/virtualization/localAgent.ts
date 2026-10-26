@@ -1967,7 +1967,7 @@ export class LocalLxcProvider implements VirtualizationProvider {
     return checkConsoleRunnable({ container_id: containerId, template });
   }
 
-  openConsole(nodeId: string, containerId: string, clientWs: WebSocket, user: AuthUser, template?: string): void {
+  openConsole(nodeId: string, containerId: string, clientWs: WebSocket, user: AuthUser, template?: string, options?: { session?: string; cols?: number; rows?: number }): void {
     this.requireLocalNode(nodeId);
     // Local console is managed through local pty in console.ts
   }

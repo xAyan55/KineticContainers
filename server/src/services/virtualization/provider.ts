@@ -280,7 +280,7 @@ export interface VirtualizationProvider {
 
   // Console
   checkConsole(nodeId: string, containerId: string, template?: string): Promise<ConsoleCheck>;
-  openConsole(nodeId: string, containerId: string, clientWs: WebSocket, user: AuthUser, template?: string): void;
+  openConsole(nodeId: string, containerId: string, clientWs: WebSocket, user: AuthUser, template?: string, options?: { session?: string; cols?: number; rows?: number }): void;
 
   // Files
   listFiles(nodeId: string, containerId: string, path: string, opts?: ListFilesOptions): Promise<ListFilesResult>;

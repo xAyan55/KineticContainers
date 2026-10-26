@@ -44,6 +44,15 @@ export async function checkConsoleRunnable(containerId: string, template?: strin
   validateContainerId(containerId);
   const pty = loadPty();
 
+  if (!pty) {
+    return {
+      supported: false,
+      running: false,
+      shell: null,
+      reason: "Console access is unsupported: node-pty is unavailable on this remote agent host. Install build-essential and rebuild agent dependencies.",
+    };
+  }
+
   let state = "UNKNOWN";
   try {
     state = await readContainerState(containerId);
@@ -66,101 +75,128 @@ export async function checkConsoleRunnable(containerId: string, template?: strin
     supported: true,
     running: true,
     shell,
-    reason: pty ? null : "Running in fallback terminal mode (node-pty unavailable).",
+    reason: null,
   };
 }
 
 const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_PAYLOAD_BYTES = 16 * 1024;
+export const MAX_SESSIONS_PER_CONTAINER = 8;
+
+const activeSessionsByContainer = new Map<string, Set<WebSocket>>();
+
+function registerSession(containerId: string, ws: WebSocket): boolean {
+  let set = activeSessionsByContainer.get(containerId);
+  if (!set) {
+    set = new Set();
+    activeSessionsByContainer.set(containerId, set);
+  }
+  if (set.size >= MAX_SESSIONS_PER_CONTAINER) {
+    return false;
+  }
+  set.add(ws);
+  return true;
+}
+
+function unregisterSession(containerId: string, ws: WebSocket): void {
+  const set = activeSessionsByContainer.get(containerId);
+  if (set) {
+    set.delete(ws);
+    if (set.size === 0) activeSessionsByContainer.delete(containerId);
+  }
+}
 
 export function attachConsoleServer(wss: WebSocketServer): void {
   wss.on("connection", async (ws: WebSocket, req: IncomingMessage, containerId: string, template?: string) => {
     try {
       validateContainerId(containerId);
+
+      if (!registerSession(containerId, ws)) {
+        ws.send(JSON.stringify({
+          type: "error",
+          message: `Maximum concurrent terminal sessions reached for this container (limit: ${MAX_SESSIONS_PER_CONTAINER}).`,
+        }));
+        ws.close(4429, "session limit reached");
+        return;
+      }
+
+      let cleanedUp = false;
+      const cleanupSession = (): void => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        unregisterSession(containerId, ws);
+      };
+
+      ws.once("close", cleanupSession);
+      ws.once("error", cleanupSession);
+
       const check = await checkConsoleRunnable(containerId, template);
       if (!check.supported || !check.shell) {
         ws.send(JSON.stringify({ type: "error", message: check.reason ?? "Console unavailable." }));
         ws.close(4501, (check.reason ?? "unavailable").slice(0, 120));
+        cleanupSession();
         return;
       }
 
+      const pty = loadPty();
+      if (!pty) {
+        ws.send(JSON.stringify({ type: "error", message: "Console backend unavailable (node-pty missing)." }));
+        ws.close(4501, "node-pty missing");
+        cleanupSession();
+        return;
+      }
+
+      const parsedUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+      const clientSessionId = parsedUrl.searchParams.get("session") || `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const initCols = Math.max(2, Math.min(500, Math.floor(Number(parsedUrl.searchParams.get("cols")) || 80)));
+      const initRows = Math.max(2, Math.min(500, Math.floor(Number(parsedUrl.searchParams.get("rows")) || 24)));
+
       const shell = check.shell;
       const startCommand = `cd /root 2>/dev/null; exec ${shell}`;
-      const pty = loadPty();
 
-      let writeInput: (data: string) => void;
-      let resizeTerm: (cols: number, rows: number) => void;
-      let killProc: (sig?: string) => void;
+      const proc = pty.spawn("lxc-attach", ["-n", containerId, "--", shell, "-c", startCommand], {
+        name: "xterm-256color",
+        cols: initCols,
+        rows: initRows,
+        cwd: "/",
+        env: { ...(process.env as Record<string, string>), TERM: "xterm-256color" },
+      });
 
-      if (pty) {
-        const proc = pty.spawn("lxc-attach", ["-n", containerId, "--", shell, "-c", startCommand], {
-          name: "xterm-256color",
-          cols: 80,
-          rows: 24,
-          cwd: "/",
-          env: { ...(process.env as Record<string, string>), TERM: "xterm-256color" },
-        });
-
-        proc.onData((data) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "output", data }));
-          }
-        });
-
-        proc.onExit(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "exit" }));
-            ws.close(1000, "session ended");
-          }
-        });
-
-        writeInput = (data) => proc.write(data);
-        resizeTerm = (cols, rows) => proc.resize(cols, rows);
-        killProc = (sig) => {
-          try {
-            proc.kill(sig);
-          } catch {
-            // ignore
-          }
-        };
-      } else {
-        // Fallback using child_process spawn
-        const proc = spawn("lxc-attach", ["-n", containerId, "--", shell, "-c", startCommand], {
-          stdio: ["pipe", "pipe", "pipe"],
-          env: { ...(process.env as Record<string, string>), TERM: "xterm-256color" },
-        });
-
-        proc.stdout?.on("data", (chunk: Buffer) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "output", data: chunk.toString("utf8") }));
-          }
-        });
-
-        proc.stderr?.on("data", (chunk: Buffer) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "output", data: chunk.toString("utf8") }));
-          }
-        });
-
-        proc.on("exit", () => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "exit" }));
-            ws.close(1000, "session ended");
-          }
-        });
-
-        writeInput = (data) => proc.stdin?.write(data);
-        resizeTerm = () => {
-          // not supported without pty
-        };
-        killProc = (sig) => {
-          try {
-            proc.kill(sig as NodeJS.Signals);
-          } catch {
-            // ignore
-          }
-        };
+      // Notify client that session is ready
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "ready",
+          sessionId: clientSessionId,
+          cols: initCols,
+          rows: initRows,
+          shell,
+        }));
       }
+
+      proc.onData((data) => {
+        if (ws.bufferedAmount > 1024 * 1024) return;
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "output", data }));
+        }
+      });
+
+      proc.onExit((exit) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "exit", code: exit?.exitCode ?? 0 }));
+          ws.close(1000, "session ended");
+        }
+        cleanupSession();
+      });
+
+      const writeInput = (data: string) => proc.write(data);
+      const resizeTerm = (cols: number, rows: number) => proc.resize(cols, rows);
+      const killProc = (sig?: string) => {
+        try {
+          proc.kill(sig);
+        } catch {
+          // ignore
+        }
+      };
 
       let idleTimer: NodeJS.Timeout | null = setTimeout(() => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -168,6 +204,7 @@ export function attachConsoleServer(wss: WebSocketServer): void {
           ws.close(4408, "idle");
         }
         killProc("SIGKILL");
+        cleanupSession();
       }, IDLE_TIMEOUT_MS);
 
       const touchIdle = (): void => {
@@ -178,6 +215,7 @@ export function attachConsoleServer(wss: WebSocketServer): void {
             ws.close(4408, "idle");
           }
           killProc("SIGKILL");
+          cleanupSession();
         }, IDLE_TIMEOUT_MS);
       };
 
@@ -195,12 +233,22 @@ export function attachConsoleServer(wss: WebSocketServer): void {
           const cols = Math.max(2, Math.min(500, Math.floor(Number(msg.cols) || 80)));
           const rows = Math.max(2, Math.min(500, Math.floor(Number(msg.rows) || 24)));
           resizeTerm(cols, rows);
+        } else if (msg.type === "terminate") {
+          if (idleTimer) clearTimeout(idleTimer);
+          killProc("SIGHUP");
+          ws.close(1000, "terminated");
+          cleanupSession();
+        } else if (msg.type === "ping") {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "pong" }));
+          }
         }
       });
 
       const cleanup = (): void => {
         if (idleTimer) clearTimeout(idleTimer);
         killProc();
+        cleanupSession();
       };
 
       ws.on("close", cleanup);

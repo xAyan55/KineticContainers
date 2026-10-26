@@ -31,9 +31,7 @@ import {
   PageHeader,
   StatusBadge,
 } from "@/components/ui/primitives";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
+import { KineticTerminal } from "@/components/terminal/KineticTerminal";
 import { FilesTab } from "@/pages/InstanceFiles";
 import { VpsDetailFeatures } from "@/components/ui/vps-detail-features";
 
@@ -255,228 +253,26 @@ export function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onR
   );
 }
 
-type ConsolePhase = "checking" | "connecting" | "open" | "closed" | "unsupported" | "error";
-
-export function ConsoleTab({ instanceId }: { instanceId: string }) {
-  const [phase, setPhase] = React.useState<ConsolePhase>("checking");
-  const [reason, setReason] = React.useState<string>("");
-  const [detail, setDetail] = React.useState<string>("");
-  const [connectSeq, setConnectSeq] = React.useState(0);
-  const boxRef = React.useRef<HTMLDivElement | null>(null);
-  const sessionRef = React.useRef<{ term: Terminal; ws: WebSocket } | null>(null);
-
-  // 1. Initial preflight check
-  React.useEffect(() => {
-    let cancelled = false;
-    api
-      .get<{ supported: boolean; running: boolean; reason: string | null }>(`/api/instances/${instanceId}/console`)
-      .then((d) => {
-        if (cancelled) return;
-        if (d.supported) {
-          setPhase("connecting");
-          setConnectSeq((s) => s + 1);
-        } else {
-          setPhase("unsupported");
-          setReason(d.reason ?? "Console unavailable.");
-        }
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setPhase("error");
-        setDetail(err instanceof ApiError ? err.message : "Could not check console availability.");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [instanceId]);
-
-  // 2. Terminal session lifecycle - driven by connectSeq, NOT phase!
-  React.useEffect(() => {
-    if (connectSeq === 0) return;
-    const box = boxRef.current;
-    if (!box) return;
-
-    box.replaceChildren();
-
-    const term = new Terminal({
-      cursorBlink: true,
-      cursorStyle: "block",
-      fontSize: 14,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-      theme: {
-        background: "#000000",
-        foreground: "#F5F5F5",
-        cursor: "#F5F5F5",
-        selectionBackground: "#303030",
-      },
-    });
-
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(box);
-
-    const fitTerminal = () => {
-      try {
-        if (box.clientWidth > 0 && box.clientHeight > 0) {
-          fit.fit();
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-
-    requestAnimationFrame(fitTerminal);
-
-    const ro = new ResizeObserver(() => {
-      fitTerminal();
-    });
-    ro.observe(box);
-
-    const wsPath = `/api/instances/${instanceId}/console`;
-    let wsUrl: string;
-    if (apiBase) {
-      try {
-        const u = new URL(apiBase, window.location.href);
-        const proto = u.protocol === "https:" ? "wss:" : "ws:";
-        wsUrl = `${proto}//${u.host}${wsPath}`;
-      } catch {
-        const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-        wsUrl = `${proto}//${window.location.host}${wsPath}`;
-      }
-    } else {
-      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-      wsUrl = `${proto}//${window.location.host}${wsPath}`;
-    }
-
-    const ws = new WebSocket(wsUrl);
-    sessionRef.current = { term, ws };
-
-    ws.onopen = () => {
-      setPhase("open");
-      fitTerminal();
-      ws.send(JSON.stringify({ type: "resize", cols: term.cols || 80, rows: term.rows || 24 }));
-      term.focus();
-    };
-
-    ws.onmessage = async (ev: MessageEvent) => {
-      let text = "";
-      if (typeof ev.data === "string") {
-        text = ev.data;
-      } else if (ev.data instanceof Blob) {
-        text = await ev.data.text();
-      } else if (ev.data instanceof ArrayBuffer) {
-        text = new TextDecoder().decode(ev.data);
-      } else {
-        return;
-      }
-      let msg: { type?: string; data?: string; message?: string };
-      try {
-        msg = JSON.parse(text);
-      } catch {
-        return;
-      }
-      if (msg.type === "output" && typeof msg.data === "string") {
-        term.write(msg.data);
-      } else if (msg.type === "error") {
-        setDetail(msg.message ?? "Console error.");
-      } else if (msg.type === "exit") {
-        setPhase("closed");
-        setDetail("Session ended.");
-      }
-    };
-
-    ws.onclose = () => {
-      setPhase("closed");
-    };
-
-    ws.onerror = () => {
-      setDetail("Connection failed. The container may have stopped or the session was rejected.");
-    };
-
-    const dataSub = term.onData((data: string) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "input", data }));
-      }
-    });
-
-    const resizeSub = term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols, rows }));
-      }
-    });
-
-    return () => {
-      dataSub.dispose();
-      resizeSub.dispose();
-      ro.disconnect();
-      try {
-        ws.close(1000, "client disconnect");
-      } catch {
-        /* ignore */
-      }
-      try {
-        term.dispose();
-      } catch {
-        /* ignore */
-      }
-      sessionRef.current = null;
-    };
-  }, [connectSeq, instanceId]);
-
+export function ConsoleTab({
+  instanceId,
+  instanceName,
+  running,
+  onRefreshInstance,
+}: {
+  instanceId: string;
+  instanceName?: string;
+  running?: boolean;
+  onRefreshInstance?: () => void;
+}) {
   return (
-    <Card>
-      <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-primary">
-        <TerminalIcon className="h-4 w-4" aria-hidden="true" /> Container console
-      </h2>
-      <p className="mb-4 text-xs text-muted">Attached to the container only — never the host shell. Sessions end after 15 minutes idle.</p>
-      {phase === "checking" ? <p className="text-sm text-muted" role="status">Checking console availability…</p> : null}
-      {phase === "unsupported" ? (
-        <EmptyState title="Console unavailable" hint={reason} />
-      ) : null}
-      {phase === "error" ? <InlineAlert message={detail} /> : null}
-      {phase === "connecting" || phase === "open" || phase === "closed" ? (
-        <div className="flex flex-col gap-3">
-          {phase === "closed" && (
-            <div>
-              <Button
-                type="button"
-                onClick={() => {
-                  setDetail("");
-                  setPhase("connecting");
-                  setConnectSeq((s) => s + 1);
-                }}
-              >
-                Reconnect
-              </Button>
-            </div>
-          )}
-          {phase === "connecting" ? <p className="text-sm text-muted" role="status">Connecting…</p> : null}
-          {phase === "open" && (
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                sessionRef.current?.ws.close(1000, "user disconnect");
-                setPhase("closed");
-                setDetail("Session disconnected.");
-              }}
-            >
-              Disconnect
-            </Button>
-          )}
-          <InlineAlert message={detail || undefined} />
-          <div
-            ref={boxRef}
-            onClick={() => {
-              sessionRef.current?.term.focus();
-            }}
-            tabIndex={0}
-            className="min-h-[360px] h-[420px] cursor-text overflow-hidden rounded-md border border-border bg-black p-2 focus:outline-none focus:ring-1 focus:ring-primary"
-            aria-label="Container terminal"
-          />
-        </div>
-      ) : null}
-    </Card>
+    <div className="flex flex-col gap-3">
+      <KineticTerminal
+        instanceId={instanceId}
+        instanceName={instanceName}
+        running={running}
+        onRefreshInstance={onRefreshInstance}
+      />
+    </div>
   );
 }
 
@@ -1486,7 +1282,14 @@ export function InstanceDetailsPage(): React.JSX.Element {
             <TabErrorBoundary key={tab}>
             {tab === "overview" && <OverviewTab detail={detail} onRefresh={refresh} />}
             {tab === "notes" && <NotesTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
-            {tab === "console" && <ConsoleTab instanceId={detail.instance.id} />}
+            {tab === "console" && (
+              <ConsoleTab
+                instanceId={detail.instance.id}
+                instanceName={detail.instance.name}
+                running={detail.live.exists ? detail.live.status === "running" : false}
+                onRefreshInstance={refresh}
+              />
+            )}
             {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
             {tab === "network" && <NetworkTab detail={detail} />}
             {tab === "files" && <FilesTab instanceId={detail.instance.id} />}
