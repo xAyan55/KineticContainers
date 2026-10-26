@@ -63,17 +63,17 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 const STATUS_DOTS: Record<string, string> = {
-  running: "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]",
-  online: "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]",
-  active: "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]",
-  starting: "bg-amber-400 animate-pulse",
-  stopping: "bg-amber-400 animate-pulse",
+  running: "bg-emerald-400",
+  online: "bg-emerald-400",
+  active: "bg-emerald-400",
+  starting: "bg-amber-400",
+  stopping: "bg-amber-400",
   stopped: "bg-zinc-500",
   offline: "bg-zinc-500",
   disabled: "bg-zinc-600",
-  failed: "bg-rose-400 shadow-[0_0_6px_rgba(251,113,133,0.6)]",
-  error: "bg-rose-400 shadow-[0_0_6px_rgba(251,113,133,0.6)]",
-  suspended: "bg-purple-400 shadow-[0_0_6px_rgba(192,132,252,0.5)]",
+  failed: "bg-rose-400",
+  error: "bg-rose-400",
+  suspended: "bg-purple-400",
   missing: "bg-amber-400",
   expired: "bg-zinc-600",
   revoked: "bg-zinc-600",
@@ -87,7 +87,7 @@ export function StatusBadge({ status, className }: { status: string; className?:
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium tracking-tight",
+        "inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs font-medium tracking-tight",
         STATUS_STYLES[status] ?? STATUS_STYLES.unknown,
         className
       )}

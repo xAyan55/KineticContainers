@@ -12,7 +12,6 @@ import {
   Plus,
   Server,
   Settings,
-  TrendingUp,
   UserRound,
   Users,
   X,
@@ -30,11 +29,8 @@ interface NavEntry {
   Icon: LucideIcon;
 }
 
-// Main navigation entries.
-const MAIN_NAV: NavEntry[] = [
-  { to: "/", end: true, label: "Dashboard", Icon: LayoutDashboard },
-  { to: "/finance", end: true, label: "Finance Bento", Icon: TrendingUp },
-];
+// The dashboard IS the user's VPS list — one entry, no duplicates.
+const MAIN_NAV: NavEntry[] = [{ to: "/", end: true, label: "Dashboard", Icon: LayoutDashboard }];
 
 const ACCOUNT_NAV: NavEntry[] = [{ to: "/profile", end: true, label: "Profile", Icon: UserRound }];
 
