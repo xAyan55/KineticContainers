@@ -253,22 +253,22 @@ export function AdminInstancesPage(): React.JSX.Element {
           updateParams({ q: searchInput.trim() });
         }}
       >
-        <div className="min-w-52 flex-1">
+        <div className="w-full min-w-0 sm:min-w-52 sm:flex-1">
           <Label htmlFor="instances-q">Search</Label>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden="true" />
             <Input
               id="instances-q"
-              className="pl-9"
+              className="!pl-9"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Name, container, ID, owner…"
             />
           </div>
         </div>
-        <div>
+        <div className="w-full min-w-0 sm:w-auto">
           <Label htmlFor="instances-status">Status</Label>
-          <select id="instances-status" className="kct-input" value={status} onChange={(e) => updateParams({ status: e.target.value })}>
+          <select id="instances-status" className="kct-input w-full sm:w-auto" value={status} onChange={(e) => updateParams({ status: e.target.value })}>
             {STATUS_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -276,9 +276,9 @@ export function AdminInstancesPage(): React.JSX.Element {
             ))}
           </select>
         </div>
-        <div>
+        <div className="w-full min-w-0 sm:w-auto">
           <Label htmlFor="instances-node">Node</Label>
-          <select id="instances-node" className="kct-input" value={nodeId} onChange={(e) => updateParams({ node_id: e.target.value })}>
+          <select id="instances-node" className="kct-input w-full sm:w-auto" value={nodeId} onChange={(e) => updateParams({ node_id: e.target.value })}>
             <option value="">All nodes</option>
             {nodes.map((n) => (
               <option key={n.id} value={n.id}>
@@ -287,9 +287,9 @@ export function AdminInstancesPage(): React.JSX.Element {
             ))}
           </select>
         </div>
-        <div>
+        <div className="w-full min-w-0 sm:w-auto">
           <Label htmlFor="instances-owner">Owner</Label>
-          <select id="instances-owner" className="kct-input" value={ownerId} onChange={(e) => updateParams({ owner_id: e.target.value })}>
+          <select id="instances-owner" className="kct-input w-full sm:w-auto" value={ownerId} onChange={(e) => updateParams({ owner_id: e.target.value })}>
             <option value="">All owners</option>
             {users.map((u) => (
               <option key={u.id} value={u.id}>
@@ -298,9 +298,9 @@ export function AdminInstancesPage(): React.JSX.Element {
             ))}
           </select>
         </div>
-        <div>
+        <div className="w-full min-w-0 sm:w-auto">
           <Label htmlFor="instances-template">OS template</Label>
-          <select id="instances-template" className="kct-input" value={template} onChange={(e) => updateParams({ template: e.target.value })}>
+          <select id="instances-template" className="kct-input w-full sm:w-auto" value={template} onChange={(e) => updateParams({ template: e.target.value })}>
             <option value="">All templates</option>
             {templates.map((t) => (
               <option key={t} value={t}>
@@ -309,9 +309,9 @@ export function AdminInstancesPage(): React.JSX.Element {
             ))}
           </select>
         </div>
-        <div>
+        <div className="w-full min-w-0 sm:w-auto">
           <Label htmlFor="instances-sort">Sort</Label>
-          <select id="instances-sort" className="kct-input" value={sortValue} onChange={(e) => updateParams({ sort: e.target.value })}>
+          <select id="instances-sort" className="kct-input w-full sm:w-auto" value={sortValue} onChange={(e) => updateParams({ sort: e.target.value })}>
             {SORT_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
@@ -319,7 +319,7 @@ export function AdminInstancesPage(): React.JSX.Element {
             ))}
           </select>
         </div>
-        <Button type="submit">Search</Button>
+        <Button type="submit" className="w-full sm:w-auto">Search</Button>
       </form>
 
       {loading && instances === null ? (

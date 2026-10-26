@@ -31,78 +31,97 @@ body {
   outline-offset: 2px;
 }
 
-.kct-card {
-  background: #101010;
-  border: 1px solid #2a2a2a;
-  border-radius: 6px;
-}
+@layer components {
+  .kct-card {
+    background: #101010;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+  }
 
-.kct-input {
-  background: #101010;
-  border: 1px solid #2a2a2a;
-  border-radius: 6px;
-  color: #f5f5f5;
-  width: 100%;
-  padding: 0.55rem 0.75rem;
-  font-size: 0.875rem;
-}
+  .kct-input {
+    background: #101010;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    color: #f5f5f5;
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.875rem;
+  }
 
-.kct-input::placeholder {
-  color: #888888;
-}
+  .kct-input::placeholder {
+    color: #888888;
+  }
 
-.kct-input:disabled {
-  opacity: 0.6;
-}
+  .kct-input:disabled {
+    opacity: 0.6;
+  }
 
-.kct-btn-primary {
-  background: #ffffff;
-  color: #000000;
-  border-radius: 6px;
-  font-weight: 600;
-  font-size: 0.875rem;
-  padding: 0.55rem 1rem;
-  border: 1px solid #ffffff;
-}
+  .kct-btn-primary {
+    background: #ffffff;
+    color: #000000;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.875rem;
+    padding: 0.55rem 1rem;
+    border: 1px solid #ffffff;
+  }
 
-.kct-btn-primary:hover {
-  background: #f0f0f0;
-}
+  .kct-btn-primary:hover {
+    background: #f0f0f0;
+  }
 
-.kct-btn-primary:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
+  .kct-btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
 
-.kct-btn-ghost {
-  background: transparent;
-  color: #f5f5f5;
-  border: 1px solid #2a2a2a;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  padding: 0.55rem 1rem;
-}
+  .kct-btn-ghost {
+    background: transparent;
+    color: #f5f5f5;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    padding: 0.55rem 1rem;
+  }
 
-.kct-btn-ghost:hover {
-  background: #202020;
-}
+  .kct-btn-ghost:hover {
+    background: #202020;
+  }
 
-.kct-table th {
-  text-align: left;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #888888;
-  font-weight: 600;
-  padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid #2a2a2a;
-}
+  .kct-table th {
+    text-align: left;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #888888;
+    font-weight: 600;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid #2a2a2a;
+  }
 
-.kct-table td {
-  padding: 0.65rem 0.75rem;
-  font-size: 0.875rem;
-  border-bottom: 1px solid #1e1e1e;
-  vertical-align: middle;
+  .kct-table td {
+    padding: 0.65rem 0.75rem;
+    font-size: 0.875rem;
+    border-bottom: 1px solid #1e1e1e;
+    vertical-align: middle;
+  }
+
+  /* Interactive cards with subtle border & background transitions */
+  .kct-card-interactive {
+    transition: border-color 150ms ease, background-color 150ms ease;
+  }
+  .kct-card-interactive:hover {
+    border-color: #383838;
+    background-color: #141414;
+  }
+
+  /* Row hover highlight for tables */
+  .kct-table tbody tr {
+    transition: background-color 100ms ease;
+  }
+  .kct-table tbody tr:hover td {
+    background-color: rgba(255, 255, 255, 0.025);
+  }
 }
 
 /* Accessible tooltip for collapsed-sidebar icon buttons (hover + keyboard focus). */
@@ -152,21 +171,4 @@ body {
 
 .kct-scroll::-webkit-scrollbar-track {
   background: transparent;
-}
-
-/* Interactive cards with subtle border & background transitions */
-.kct-card-interactive {
-  transition: border-color 150ms ease, background-color 150ms ease;
-}
-.kct-card-interactive:hover {
-  border-color: #383838;
-  background-color: #141414;
-}
-
-/* Row hover highlight for tables */
-.kct-table tbody tr {
-  transition: background-color 100ms ease;
-}
-.kct-table tbody tr:hover td {
-  background-color: rgba(255, 255, 255, 0.025);
 }

@@ -465,7 +465,7 @@ export function FilesTab({ instanceId }: { instanceId: string }): React.JSX.Elem
               className="relative"
             >
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden="true" />
-              <Input aria-label="Search in this directory" className="w-44 py-1.5 pl-8 text-xs" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search names…" />
+              <Input aria-label="Search in this directory" className="w-44 py-1.5 !pl-8 text-xs" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search names…" />
             </form>
             <select aria-label="Sort by" className="kct-input w-auto py-1.5 text-xs" value={sort} onChange={(e) => { setSort(e.target.value as typeof sort); setOffset(0); }}>
               <option value="name">Name</option>

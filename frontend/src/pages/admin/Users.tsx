@@ -119,7 +119,7 @@ export function AdminUsersPage(): React.JSX.Element {
         </Card>
       ) : null}
       <form
-        className="mb-4 flex gap-2"
+        className="mb-4 flex flex-wrap sm:flex-nowrap gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           setPage(1);
@@ -130,9 +130,9 @@ export function AdminUsersPage(): React.JSX.Element {
         <label htmlFor="user-search" className="sr-only">Search users</label>
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden="true" />
-          <Input id="user-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or email…" className="pl-9" />
+          <Input id="user-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or email…" className="!pl-9" />
         </div>
-        <button type="submit" className="kct-btn-ghost">Search</button>
+        <button type="submit" className="kct-btn-ghost w-full sm:w-auto">Search</button>
       </form>
 
       <InlineAlert message={error} />

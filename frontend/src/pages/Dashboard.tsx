@@ -253,14 +253,14 @@ export function DashboardPage(): React.JSX.Element {
           {/* Controls Bar: Search, Status Filter, View Toggle */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             {/* Search Input */}
-            <div className="relative min-w-[240px] max-w-sm flex-1">
+            <div className="relative w-full min-w-0 sm:w-auto sm:min-w-[220px] sm:max-w-sm flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden="true" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search instances by name, ID, node…"
-                className="kct-input pl-9 pr-8 text-xs"
+                className="kct-input !pl-9 pr-8 text-xs"
               />
               {searchQuery ? (
                 <button
@@ -277,7 +277,7 @@ export function DashboardPage(): React.JSX.Element {
             {/* Filter Pills & View Mode Switch */}
             <div className="flex flex-wrap items-center justify-between gap-2 sm:justify-end">
               {/* Status Filter Tabs */}
-              <div role="tablist" aria-label="Filter by status" className="inline-flex rounded-lg border border-border bg-surface p-0.5">
+              <div role="tablist" aria-label="Filter by status" className="inline-flex max-w-full overflow-x-auto rounded-lg border border-border bg-surface p-0.5">
                 {(["all", "running", "stopped", "suspended"] as const).map((filter) => {
                   const count =
                     filter === "all"
