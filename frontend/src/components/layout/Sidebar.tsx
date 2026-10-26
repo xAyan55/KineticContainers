@@ -21,6 +21,8 @@ import { useAuth } from "@/features/auth/AuthContext";
 import { avatarDataUri } from "@/lib/avatar";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/ui/brand-mark";
+import { AnimatePresence, motion } from "framer-motion";
+import { SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 
 interface NavEntry {
   to: string;
@@ -29,7 +31,6 @@ interface NavEntry {
   Icon: LucideIcon;
 }
 
-// The dashboard IS the user's VPS list — one entry, no duplicates.
 const MAIN_NAV: NavEntry[] = [{ to: "/", end: true, label: "Dashboard", Icon: LayoutDashboard }];
 
 const ACCOUNT_NAV: NavEntry[] = [{ to: "/profile", end: true, label: "Profile", Icon: UserRound }];
@@ -46,11 +47,11 @@ const ADMIN_NAV: NavEntry[] = [
 
 function NavItem({
   entry,
-  collapsed,
+  isOpen,
   onNavigate,
 }: {
   entry: NavEntry;
-  collapsed: boolean;
+  isOpen: boolean;
   onNavigate?: () => void;
 }): React.JSX.Element {
   const { to, end, label, Icon } = entry;
@@ -60,18 +61,30 @@ function NavItem({
         to={to}
         end={end}
         onClick={onNavigate}
-        aria-label={collapsed ? label : undefined}
-        data-tip={collapsed ? label : undefined}
+        aria-label={!isOpen ? label : undefined}
+        data-tip={!isOpen ? label : undefined}
         className={({ isActive }) =>
           cn(
-            "kct-tip flex items-center gap-3 rounded-md text-sm transition-colors",
-            collapsed ? "justify-center px-0 py-2.5" : "px-3 py-2",
-            isActive ? "bg-mid font-medium text-white" : "text-muted hover:bg-raised hover:text-primary"
+            "kct-tip group/sidebar relative flex items-center gap-3 rounded-md text-sm transition-colors duration-150",
+            !isOpen ? "justify-center px-0 py-2.5" : "px-3 py-2",
+            isActive
+              ? "bg-mid font-medium text-primary shadow-sm"
+              : "text-muted hover:bg-raised hover:text-primary"
           )
         }
       >
-        <Icon className="h-[1.125rem] w-[1.125rem] shrink-0" aria-hidden="true" />
-        {collapsed ? null : <span className="truncate">{label}</span>}
+        <Icon className="h-4 w-4 shrink-0 transition-transform duration-150 group-hover/sidebar:scale-110" aria-hidden="true" />
+        <motion.span
+          animate={{
+            display: isOpen ? "inline-block" : "none",
+            opacity: isOpen ? 1 : 0,
+            x: isOpen ? 0 : -4,
+          }}
+          transition={{ duration: 0.18 }}
+          className="truncate text-sm whitespace-pre group-hover/sidebar:translate-x-0.5 transition-transform duration-150"
+        >
+          {label}
+        </motion.span>
       </NavLink>
     </li>
   );
@@ -79,93 +92,33 @@ function NavItem({
 
 function NavSection({
   title,
-  collapsed,
+  isOpen,
   children,
 }: {
   title: string;
-  collapsed: boolean;
+  isOpen: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
-    <div>
-      {collapsed ? null : (
-        <p aria-hidden="true" className="px-3 pb-1.5 pt-4 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-muted">
-          {title}
-        </p>
-      )}
+    <div className="py-1">
+      <motion.p
+        animate={{
+          display: isOpen ? "block" : "none",
+          opacity: isOpen ? 1 : 0,
+        }}
+        transition={{ duration: 0.15 }}
+        aria-hidden="true"
+        className="px-3 pb-1.5 pt-3 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-muted truncate"
+      >
+        {title}
+      </motion.p>
+      {!isOpen && <div className="my-2 border-t border-border/40 mx-2" />}
       <ul className="flex flex-col gap-0.5">{children}</ul>
     </div>
   );
 }
 
-function SidebarBody({
-  appName,
-  logoUrl,
-  collapsed,
-  isAdmin,
-  onToggleCollapse,
-  onNavigate,
-  showToggle,
-}: {
-  appName: string;
-  logoUrl?: string;
-  collapsed: boolean;
-  isAdmin: boolean;
-  onToggleCollapse: () => void;
-  onNavigate?: () => void;
-  showToggle: boolean;
-}): React.JSX.Element {
-  return (
-    <div className="flex h-full flex-col">
-      <div className={cn("flex items-center border-b border-border", collapsed ? "flex-col gap-2 py-4" : "h-14 justify-between px-4")}>
-        <Link
-          to="/"
-          onClick={onNavigate}
-          aria-label={`${appName} home`}
-          className={cn("flex min-w-0 items-center gap-2.5", collapsed && "justify-center")}
-        >
-          <BrandMark logoUrl={logoUrl} label={`${appName} logo`} />
-          {collapsed ? null : <span className="truncate text-sm font-semibold tracking-tight text-logo">{appName}</span>}
-        </Link>
-        {showToggle ? (
-          <button
-            type="button"
-            onClick={onToggleCollapse}
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="rounded-md p-1.5 text-muted hover:bg-raised hover:text-primary"
-          >
-            {collapsed ? <ChevronsRight className="h-4 w-4" aria-hidden="true" /> : <ChevronsLeft className="h-4 w-4" aria-hidden="true" />}
-          </button>
-        ) : null}
-      </div>
-
-      <nav aria-label="Primary" className="kct-scroll flex-1 overflow-y-auto px-3 py-2">
-        <NavSection title="Main" collapsed={collapsed}>
-          {MAIN_NAV.map((entry) => (
-            <NavItem key={entry.label} entry={entry} collapsed={collapsed} onNavigate={onNavigate} />
-          ))}
-        </NavSection>
-        <NavSection title="Account" collapsed={collapsed}>
-          {ACCOUNT_NAV.map((entry) => (
-            <NavItem key={entry.label} entry={entry} collapsed={collapsed} onNavigate={onNavigate} />
-          ))}
-        </NavSection>
-        {isAdmin ? (
-          <NavSection title="Administration" collapsed={collapsed}>
-            {ADMIN_NAV.map((entry) => (
-              <NavItem key={entry.label} entry={entry} collapsed={collapsed} onNavigate={onNavigate} />
-            ))}
-          </NavSection>
-        ) : null}
-      </nav>
-
-      <SidebarFooter collapsed={collapsed} onNavigate={onNavigate} />
-    </div>
-  );
-}
-
-function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }): React.JSX.Element {
+function SidebarFooterInner({ isOpen, onNavigate }: { isOpen: boolean; onNavigate?: () => void }): React.JSX.Element {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = React.useState(false);
@@ -203,46 +156,67 @@ function SidebarFooter({ collapsed, onNavigate }: { collapsed: boolean; onNaviga
   };
 
   return (
-    <div className="relative border-t border-border p-3" ref={menuRef}>
-      {menuOpen ? (
-        <div role="menu" aria-label="Account" className="absolute bottom-full left-3 z-30 mb-2 w-52 overflow-hidden rounded-md border border-border bg-raised shadow-none">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={goProfile}
-            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-muted hover:bg-mid hover:text-primary"
+    <div className="relative border-t border-border p-2.5" ref={menuRef}>
+      <AnimatePresence>
+        {menuOpen && (
+          <motion.div
+            role="menu"
+            aria-label="Account"
+            initial={{ opacity: 0, y: 8, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.95 }}
+            transition={{ duration: 0.15 }}
+            className="absolute bottom-full left-2 z-50 mb-2 w-52 overflow-hidden rounded-md border border-border bg-raised shadow-xl"
           >
-            <UserRound className="h-4 w-4" aria-hidden="true" /> Profile
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => void onLogout()}
-            className="flex w-full items-center gap-2.5 border-t border-border px-3 py-2 text-left text-sm text-muted hover:bg-mid hover:text-primary"
-          >
-            <LogOut className="h-4 w-4" aria-hidden="true" /> Logout
-          </button>
-        </div>
-      ) : null}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={goProfile}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-muted hover:bg-mid hover:text-primary transition-colors cursor-pointer"
+            >
+              <UserRound className="h-4 w-4" aria-hidden="true" /> Profile
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void onLogout()}
+              className="flex w-full items-center gap-2.5 border-t border-border px-3 py-2 text-left text-sm text-muted hover:bg-mid hover:text-primary transition-colors cursor-pointer"
+            >
+              <LogOut className="h-4 w-4" aria-hidden="true" /> Logout
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <button
         type="button"
         onClick={() => setMenuOpen((v) => !v)}
         aria-expanded={menuOpen}
         aria-haspopup="menu"
-        aria-label={collapsed ? `Account: ${user.name}` : undefined}
-        data-tip={collapsed ? user.name : undefined}
+        aria-label={!isOpen ? `Account: ${user.name}` : undefined}
+        data-tip={!isOpen ? user.name : undefined}
         className={cn(
-          "kct-tip flex w-full items-center gap-2.5 rounded-md p-1.5 hover:bg-raised",
-          collapsed && "justify-center"
+          "kct-tip flex w-full items-center gap-2.5 rounded-md p-1.5 hover:bg-raised transition-colors cursor-pointer",
+          !isOpen && "justify-center"
         )}
       >
-        <img src={avatarDataUri(user.avatar_seed || user.email)} alt="" width={28} height={28} className="shrink-0 rounded-full border border-border" />
-        {collapsed ? null : (
-          <span className="min-w-0 flex-1 text-left">
-            <span className="block truncate text-sm font-medium text-primary">{user.name}</span>
-            <span className="block truncate text-xs text-muted">{user.email}</span>
-          </span>
-        )}
+        <img
+          src={avatarDataUri(user.avatar_seed || user.email)}
+          alt=""
+          width={28}
+          height={28}
+          className="shrink-0 rounded-full border border-border"
+        />
+        <motion.span
+          animate={{
+            display: isOpen ? "block" : "none",
+            opacity: isOpen ? 1 : 0,
+          }}
+          transition={{ duration: 0.18 }}
+          className="min-w-0 flex-1 text-left truncate"
+        >
+          <span className="block truncate text-sm font-medium text-primary">{user.name}</span>
+          <span className="block truncate text-xs text-muted">{user.email}</span>
+        </motion.span>
       </button>
     </div>
   );
@@ -260,23 +234,83 @@ export function Sidebar({
   onToggleCollapse: () => void;
 }): React.JSX.Element {
   const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const [hovered, setHovered] = React.useState(false);
+
+  // If collapsed is false, it's pinned open. If collapsed is true, it expands temporarily on hover!
+  const isExpanded = !collapsed || hovered;
+
   return (
-    <aside
+    <motion.aside
       aria-label="Sidebar"
-      className={cn(
-        "sticky top-0 hidden h-screen shrink-0 border-r border-border bg-surface transition-[width] duration-200 lg:block",
-        collapsed ? "w-[4.25rem]" : "w-60"
-      )}
+      animate={{
+        width: isExpanded ? "260px" : "64px",
+      }}
+      transition={{ duration: 0.22, ease: "easeInOut" }}
+      onMouseEnter={() => {
+        if (collapsed) setHovered(true);
+      }}
+      onMouseLeave={() => {
+        if (collapsed) setHovered(false);
+      }}
+      className="sticky top-0 hidden h-screen shrink-0 border-r border-border bg-surface lg:flex lg:flex-col z-30 overflow-hidden"
     >
-      <SidebarBody
-        appName={appName}
-        logoUrl={logoUrl}
-        collapsed={collapsed}
-        isAdmin={user?.role === "admin"}
-        onToggleCollapse={onToggleCollapse}
-        showToggle
-      />
-    </aside>
+      {/* Sidebar Header */}
+      <div className={cn("flex items-center border-b border-border h-14", !isExpanded ? "justify-center px-0" : "justify-between px-3.5")}>
+        <Link
+          to="/"
+          aria-label={`${appName} home`}
+          className={cn("flex min-w-0 items-center gap-2.5", !isExpanded && "justify-center")}
+        >
+          <BrandMark logoUrl={logoUrl} label={`${appName} logo`} />
+          <motion.span
+            animate={{
+              display: isExpanded ? "inline-block" : "none",
+              opacity: isExpanded ? 1 : 0,
+            }}
+            transition={{ duration: 0.18 }}
+            className="truncate text-sm font-semibold tracking-tight text-logo whitespace-pre"
+          >
+            {appName}
+          </motion.span>
+        </Link>
+        {isExpanded && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Pin sidebar open" : "Collapse sidebar"}
+            className="rounded-md p-1.5 text-muted hover:bg-raised hover:text-primary transition-colors cursor-pointer"
+          >
+            {collapsed ? <ChevronsRight className="h-4 w-4" aria-hidden="true" /> : <ChevronsLeft className="h-4 w-4" aria-hidden="true" />}
+          </button>
+        )}
+      </div>
+
+      {/* Primary Navigation */}
+      <nav aria-label="Primary" className="kct-scroll flex-1 overflow-y-auto px-2 py-3">
+        <NavSection title="Main" isOpen={isExpanded}>
+          {MAIN_NAV.map((entry) => (
+            <NavItem key={entry.label} entry={entry} isOpen={isExpanded} />
+          ))}
+        </NavSection>
+        <NavSection title="Account" isOpen={isExpanded}>
+          {ACCOUNT_NAV.map((entry) => (
+            <NavItem key={entry.label} entry={entry} isOpen={isExpanded} />
+          ))}
+        </NavSection>
+        {isAdmin && (
+          <NavSection title="Administration" isOpen={isExpanded}>
+            {ADMIN_NAV.map((entry) => (
+              <NavItem key={entry.label} entry={entry} isOpen={isExpanded} />
+            ))}
+          </NavSection>
+        )}
+      </nav>
+
+      {/* User Footer */}
+      <SidebarFooterInner isOpen={isExpanded} />
+    </motion.aside>
   );
 }
 
@@ -292,6 +326,7 @@ export function MobileSidebar({
   onClose: () => void;
 }): React.JSX.Element {
   const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const closeRef = React.useRef<HTMLButtonElement | null>(null);
 
   React.useEffect(() => {
@@ -310,45 +345,67 @@ export function MobileSidebar({
   }, [open, onClose]);
 
   return (
-    <>
-      <div
-        aria-hidden="true"
-        onClick={onClose}
-        className={cn(
-          "fixed inset-0 z-40 bg-black/70 transition-opacity duration-200 lg:hidden",
-          open ? "opacity-100" : "pointer-events-none opacity-0"
-        )}
-      />
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label="Navigation"
-        aria-hidden={!open}
-        className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r border-border bg-surface transition-transform duration-200 lg:hidden",
-          open ? "translate-x-0" : "invisible -translate-x-full"
-        )}
-      >
-        <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
-          <span className="flex items-center gap-2.5" aria-hidden="true">
-            <BrandMark logoUrl={logoUrl} label={`${appName} logo`} />
-            <span className="text-sm font-semibold tracking-tight text-logo">{appName}</span>
-          </span>
-          <button
-            type="button"
-            ref={closeRef}
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            aria-hidden="true"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
             onClick={onClose}
-            aria-label="Close navigation"
-            className="rounded-md p-1.5 text-muted hover:bg-raised hover:text-primary"
+            className="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm lg:hidden"
+          />
+          <motion.aside
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation"
+            initial={{ x: "-100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "-100%" }}
+            transition={{ duration: 0.25, ease: "easeInOut" }}
+            className="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-border bg-surface shadow-2xl lg:hidden"
           >
-            <X className="h-5 w-5" aria-hidden="true" />
-          </button>
-        </div>
-        <div className="min-h-0 flex-1">
-          <SidebarBody appName={appName} logoUrl={logoUrl} collapsed={false} isAdmin={user?.role === "admin"} onToggleCollapse={onClose} showToggle={false} onNavigate={onClose} />
-        </div>
-      </aside>
-    </>
+            <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+              <span className="flex items-center gap-2.5" aria-hidden="true">
+                <BrandMark logoUrl={logoUrl} label={`${appName} logo`} />
+                <span className="text-sm font-semibold tracking-tight text-logo">{appName}</span>
+              </span>
+              <button
+                type="button"
+                ref={closeRef}
+                onClick={onClose}
+                aria-label="Close navigation"
+                className="rounded-md p-1.5 text-muted hover:bg-raised hover:text-primary transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </div>
+            <nav aria-label="Mobile Primary" className="kct-scroll flex-1 overflow-y-auto px-2 py-3">
+              <NavSection title="Main" isOpen={true}>
+                {MAIN_NAV.map((entry) => (
+                  <NavItem key={entry.label} entry={entry} isOpen={true} onNavigate={onClose} />
+                ))}
+              </NavSection>
+              <NavSection title="Account" isOpen={true}>
+                {ACCOUNT_NAV.map((entry) => (
+                  <NavItem key={entry.label} entry={entry} isOpen={true} onNavigate={onClose} />
+                ))}
+              </NavSection>
+              {isAdmin && (
+                <NavSection title="Administration" isOpen={true}>
+                  {ADMIN_NAV.map((entry) => (
+                    <NavItem key={entry.label} entry={entry} isOpen={true} onNavigate={onClose} />
+                  ))}
+                </NavSection>
+              )}
+            </nav>
+            <SidebarFooterInner isOpen={true} onNavigate={onClose} />
+          </motion.aside>
+        </>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -358,7 +415,7 @@ export function SidebarMenuButton({ onClick }: { onClick: () => void }): React.J
       type="button"
       onClick={onClick}
       aria-label="Open navigation"
-      className="rounded-md p-2 text-muted hover:bg-raised hover:text-primary lg:hidden"
+      className="rounded-md p-2 text-muted hover:bg-raised hover:text-primary transition-colors lg:hidden cursor-pointer"
     >
       <Menu className="h-5 w-5" aria-hidden="true" />
     </button>
