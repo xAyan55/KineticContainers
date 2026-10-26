@@ -702,7 +702,7 @@ export function AdminOverviewPage(): React.JSX.Element {
         {/* Bento Grid */}
         <div className="bento-grid">
           {/* Card 1: Resource Stream (8 cols) */}
-          <section className="bento-card col-8 p-5 h-[360px] flex flex-col justify-between">
+          <section className="bento-card col-8 p-5 h-[360px] flex flex-col">
             {/* Header: Title on Left, Legend on Right */}
             <div className="flex items-center justify-between gap-3 relative z-10">
               <div className="flex items-center gap-2">
@@ -728,7 +728,7 @@ export function AdminOverviewPage(): React.JSX.Element {
             </div>
 
             {/* Middle Row: Dot Matrix & Delta Stats */}
-            <div className="flex flex-wrap items-end gap-4 my-auto relative z-10">
+            <div className="flex flex-wrap items-end gap-4 mt-2 sm:mt-2.5 relative z-10">
               <svg ref={dotSvgRef} className="dots shrink-0" aria-hidden="true" />
               <div className="pb-1">
                 <div className="text-xs font-mono font-semibold text-primary">
