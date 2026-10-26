@@ -1139,6 +1139,7 @@ fi
 # install + build
 # ---------------------------------------------------------------------------
 say "Installing project dependencies (frontend + backend) ..."
+install_build_toolchain || true
 cd "$REPO_ROOT"
 if ! npm install --no-audit --no-fund; then
   warn "npm install failed — retrying with the C++ build toolchain installed ..."
@@ -1152,6 +1153,18 @@ fi
 if npm approve-scripts --help >/dev/null 2>&1; then
   npm approve-scripts argon2 better-sqlite3 esbuild node-pty >/dev/null 2>&1 || true
   npm rebuild argon2 better-sqlite3 node-pty >/dev/null 2>&1 || true
+fi
+
+# Verify node-pty native binding for container console
+check_pty() {
+  (cd "$REPO_ROOT/server" && node -e "require('node-pty')" >/dev/null 2>&1)
+}
+if ! check_pty; then
+  warn "node-pty binding not usable — rebuilding ..."
+  install_build_toolchain || true
+  rm -rf "$REPO_ROOT/server/node_modules/node-pty" "$REPO_ROOT/node_modules/node-pty"
+  npm install --workspace=server node-pty --no-audit --no-fund || true
+  npm rebuild node-pty || true
 fi
 
 say "Building frontend (API URL: ${VITE_API_BASE_URL:-same-origin}) ..."

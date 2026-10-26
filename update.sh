@@ -66,8 +66,8 @@ if ! check_pty; then
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y -q gcc-c++ make python3 || true
   fi
-  rm -rf "$DIR/server/node_modules/node-pty"
-  npm install --no-save --workspace=server node-pty --no-audit --no-fund >/dev/null 2>&1 || true
+  rm -rf "$DIR/server/node_modules/node-pty" "$DIR/node_modules/node-pty"
+  npm install --workspace=server node-pty --no-audit --no-fund >/dev/null 2>&1 || true
   npm rebuild node-pty >/dev/null 2>&1 || true
   if check_pty; then
     info "node-pty binding repaired."
