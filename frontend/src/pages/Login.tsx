@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
-import { ModernLoginSignup } from "@/components/ui/modern-login-signup";
+import { KineticModernSignIn } from "@/components/ui/kinetic-modern-sign-in";
 import { useAuth } from "@/features/auth/AuthContext";
 import { ApiError, api } from "@/lib/api";
 
@@ -34,5 +34,5 @@ export function LoginPage({ appName }: { appName: string }): React.JSX.Element {
     }
   };
 
-  return <ModernLoginSignup appName={appName} error={error} loading={loading} registrationEnabled={registrationEnabled} onSubmit={onSubmit} />;
+  return <KineticModernSignIn appName={appName} error={error} loading={loading} registrationEnabled={registrationEnabled} onSubmit={onSubmit} />;
 }
