@@ -43,14 +43,15 @@ export function KineticModernSignIn({
           <img
             src={ubuntuImg}
             alt="Ubuntu Linux"
-            className="size-8 object-contain drop-shadow-md select-none"
-            loading="lazy"
+            className="size-7 object-contain drop-shadow-md select-none"
+            loading="eager"
+            decoding="async"
           />
         ),
         className: 'size-[46px] border-border/80 bg-surface/90',
         duration: 22,
         delay: 0,
-        radius: 110,
+        radius: 125,
         path: true,
         reverse: false,
       },
@@ -59,14 +60,15 @@ export function KineticModernSignIn({
           <img
             src={debianImg}
             alt="Debian Linux"
-            className="size-7 object-contain drop-shadow-md select-none"
-            loading="lazy"
+            className="size-6 object-contain drop-shadow-md select-none [image-rendering:crisp-edges]"
+            loading="eager"
+            decoding="async"
           />
         ),
         className: 'size-[46px] border-border/80 bg-surface/90',
         duration: 22,
         delay: 11,
-        radius: 110,
+        radius: 125,
         path: false,
         reverse: false,
       },
@@ -75,14 +77,15 @@ export function KineticModernSignIn({
           <img
             src={archImg}
             alt="Arch Linux"
-            className="size-8 object-contain drop-shadow-md select-none"
-            loading="lazy"
+            className="size-7 object-contain drop-shadow-md select-none"
+            loading="eager"
+            decoding="async"
           />
         ),
-        className: 'size-[50px] border-border/80 bg-surface/90',
+        className: 'size-[48px] border-border/80 bg-surface/90',
         duration: 32,
         delay: 0,
-        radius: 200,
+        radius: 205,
         path: true,
         reverse: true,
       },
@@ -91,14 +94,15 @@ export function KineticModernSignIn({
           <img
             src={alpineImg}
             alt="Alpine Linux"
-            className="size-8 object-contain drop-shadow-md select-none"
-            loading="lazy"
+            className="size-7 object-contain drop-shadow-md select-none"
+            loading="eager"
+            decoding="async"
           />
         ),
-        className: 'size-[50px] border-border/80 bg-surface/90',
+        className: 'size-[48px] border-border/80 bg-surface/90',
         duration: 32,
         delay: 16,
-        radius: 200,
+        radius: 205,
         path: false,
         reverse: true,
       },

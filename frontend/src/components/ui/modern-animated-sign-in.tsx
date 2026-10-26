@@ -217,10 +217,10 @@ const OrbitingCircles = React.memo(function OrbitingCircles({
         <svg
           xmlns="http://www.w3.org/2000/svg"
           version="1.1"
-          className="pointer-events-none absolute inset-0 size-full"
+          className="pointer-events-none absolute inset-0 size-full z-0"
         >
           <circle
-            className="stroke-border stroke-1"
+            className="stroke-border/70 stroke-1"
             cx="50%"
             cy="50%"
             r={radius}
@@ -237,7 +237,7 @@ const OrbitingCircles = React.memo(function OrbitingCircles({
           } as React.CSSProperties
         }
         className={cn(
-          'absolute flex size-full transform-gpu animate-orbit items-center justify-center rounded-full border border-border/40 bg-surface/80 [animation-delay:calc(var(--delay)*1000ms)] shadow-sm backdrop-blur-xs',
+          'absolute inset-0 m-auto flex transform-gpu animate-orbit items-center justify-center rounded-full border border-border/80 bg-surface/90 [animation-delay:calc(var(--delay)*1000ms)] shadow-md backdrop-blur-xs z-20',
           { '[animation-direction:reverse]': reverse },
           className
         )}
@@ -273,8 +273,8 @@ const TechOrbitDisplay = React.memo(function TechOrbitDisplay({
 }: TechnologyOrbitDisplayProps) {
   return (
     <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-lg select-none">
-      <div className="z-10 flex flex-col items-center justify-center text-center px-4">
-        <span className="pointer-events-none whitespace-pre-wrap bg-gradient-to-b from-primary via-primary/90 to-muted bg-clip-text text-center text-5xl sm:text-6xl font-bold tracking-tight text-transparent">
+      <div className="z-10 flex flex-col items-center justify-center text-center px-4 pointer-events-none">
+        <span className="whitespace-pre-wrap bg-gradient-to-b from-primary via-primary/90 to-muted bg-clip-text text-center text-4xl sm:text-5xl font-bold tracking-tight text-transparent">
           {text}
         </span>
         {subtext && (
