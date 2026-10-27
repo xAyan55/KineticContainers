@@ -3,7 +3,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Shield, Server, Activity, Cpu, HardDrive, MemoryStick } from "lucide-react";
 import type { InstanceDetail } from "@/pages/InstanceDetails";
 
-function formatMemory(mb: number): string {
+function formatMemory(mb: number | null | undefined): string {
+  if (typeof mb !== "number" || !Number.isFinite(mb)) return "—";
   if (mb >= 1024) {
     const gb = mb / 1024;
     return Number.isInteger(gb) ? `${gb} GB` : `${gb.toFixed(1)} GB`;
@@ -14,14 +15,16 @@ function formatMemory(mb: number): string {
 function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString(undefined, {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString(undefined, {
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
     });
   } catch {
-    return iso;
+    return String(iso);
   }
 }
 
@@ -30,9 +33,12 @@ export interface VpsDetailFeaturesProps {
 }
 
 export function VpsDetailFeatures({ detail }: VpsDetailFeaturesProps): React.JSX.Element {
-  const i = detail.instance;
-  const isRunning = detail.live.exists === true && detail.live.status === "running";
-  const isStopped = detail.live.exists === true && detail.live.status === "stopped";
+  const i = detail?.instance ?? ({} as InstanceDetail["instance"]);
+  const live = detail?.live ?? ({} as InstanceDetail["live"]);
+  const isRunning = live.exists === true && live.status === "running";
+  const isStopped = live.exists === true && live.status === "stopped";
+  const rawStatus = live.status || i.status || "unknown";
+  const displayStatus = String(rawStatus).toUpperCase();
 
   return (
     <div className="relative mb-5">
@@ -52,14 +58,12 @@ export function VpsDetailFeatures({ detail }: VpsDetailFeaturesProps): React.JSX
                   isRunning ? "text-emerald-400" : isStopped ? "text-muted" : "text-amber-400"
                 }`}
               >
-                {detail.live.exists
-                  ? (detail.live.status ?? i.status).toUpperCase()
-                  : "UNCONFIRMED"}
+                {live.exists ? displayStatus : "UNCONFIRMED"}
               </span>
             </div>
             <h2 className="mt-4 text-center text-xl font-semibold tracking-tight text-primary">Container State</h2>
             <p className="mt-1 text-center font-mono text-xs text-muted">
-              Live confirmed {formatDateTime(detail.live.checkedAt)}
+              Live confirmed {formatDateTime(live.checkedAt)}
             </p>
           </CardContent>
         </Card>
@@ -82,7 +86,7 @@ export function VpsDetailFeatures({ detail }: VpsDetailFeaturesProps): React.JSX
               <p className="text-xs text-muted">Dedicated CFS CPU quota enforcement & hardware core bounds.</p>
               <div className="pt-2 flex items-center justify-center gap-1.5 font-mono text-xs text-primary">
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                <span>{i.cpu} {i.cpu === 1 ? "vCPU core" : "vCPU cores"}</span>
+                <span>{i.cpu ?? 1} {(i.cpu ?? 1) === 1 ? "vCPU core" : "vCPU cores"}</span>
               </div>
             </div>
           </CardContent>
@@ -108,7 +112,7 @@ export function VpsDetailFeatures({ detail }: VpsDetailFeaturesProps): React.JSX
               <div className="pt-2 flex items-center justify-center gap-2 font-mono text-xs text-primary">
                 <span>{formatMemory(i.memory_mb)} RAM</span>
                 <span className="text-mid">·</span>
-                <span>{i.storage_gb} GB Disk</span>
+                <span>{i.storage_gb ?? 0} GB Disk</span>
               </div>
             </div>
           </CardContent>
@@ -175,7 +179,7 @@ export function VpsDetailFeatures({ detail }: VpsDetailFeaturesProps): React.JSX
                 <div className="group relative flex w-[calc(50%+0.875rem)] items-center justify-end gap-2 text-right">
                   <div className="max-w-[130px] truncate">
                     <span className="block truncate rounded border border-border bg-raised px-2 py-0.5 font-mono text-[11px] text-primary shadow-sm">
-                      {i.container_id}
+                      {i.container_id ?? "—"}
                     </span>
                     <span className="block text-[10px] text-muted font-mono">LXC ID</span>
                   </div>

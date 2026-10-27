@@ -81,14 +81,15 @@ const STATUS_DOTS: Record<string, string> = {
   unavailable: "bg-zinc-600",
 };
 
-export function StatusBadge({ status, className }: { status: string; className?: string }): React.JSX.Element {
-  const label = status.charAt(0).toUpperCase() + status.slice(1);
-  const dot = STATUS_DOTS[status] ?? "bg-zinc-500";
+export function StatusBadge({ status, className }: { status?: string | null; className?: string }): React.JSX.Element {
+  const safeStatus = (typeof status === "string" && status.trim()) ? status.trim().toLowerCase() : "unknown";
+  const label = safeStatus.charAt(0).toUpperCase() + safeStatus.slice(1);
+  const dot = STATUS_DOTS[safeStatus] ?? "bg-zinc-500";
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs font-medium tracking-tight",
-        STATUS_STYLES[status] ?? STATUS_STYLES.unknown,
+        STATUS_STYLES[safeStatus] ?? STATUS_STYLES.unknown,
         className
       )}
     >

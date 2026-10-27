@@ -83,7 +83,7 @@ export function TerminalTabs({
                   ? "bg-[#000000] border-[#2A2A2A] text-[#F5F5F5] font-medium"
                   : "bg-[#101010] border-transparent text-[#888888] hover:bg-[#161616] hover:text-[#d4d4d4]"
               }`}
-              title={`${s.title} (${statusText})`}
+              title={`${s?.title ?? "Terminal"} (${statusText})`}
             >
               <span className={`h-2 w-2 rounded-full flex-shrink-0 ${statusDotColor}`} aria-hidden="true" />
               <TerminalIcon className="h-3 w-3 text-[#666] flex-shrink-0" aria-hidden="true" />
@@ -115,7 +115,7 @@ export function TerminalTabs({
                   className="max-w-[130px] truncate"
                   title="Double-click to rename"
                 >
-                  {s.title}
+                  {s?.title ?? "Terminal"}
                 </span>
               )}
 

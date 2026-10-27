@@ -65,7 +65,6 @@ export function KineticTerminal({
         setSessions((curr) => {
           if (curr.length === 0) {
             const firstId = "term_1";
-            setActiveSessionId(firstId);
             sessionCounterRef.current = 2;
             return [
               {
@@ -85,6 +84,7 @@ export function KineticTerminal({
           }
           return curr;
         });
+        setActiveSessionId((curr) => curr || "term_1");
       }
     } catch (err) {
       setSupported(false);

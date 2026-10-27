@@ -39,9 +39,12 @@ const LiveConsumptionCharts = React.lazy(() =>
   import("@/components/ui/live-consumption-chart").then((m) => ({ default: m.LiveConsumptionCharts }))
 );
 
-export function formatDateTime(iso: string): string {
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString(undefined, {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString(undefined, {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -49,7 +52,7 @@ export function formatDateTime(iso: string): string {
       minute: "2-digit",
     });
   } catch {
-    return iso;
+    return String(iso);
   }
 }
 
@@ -182,14 +185,21 @@ export function Fact({ label, value, mono }: { label: string; value: React.React
   );
 }
 
-export class TabErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+export class TabErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { failed: boolean; error?: Error }
+> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
     this.state = { failed: false };
   }
 
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true };
+  static getDerivedStateFromError(error: Error): { failed: boolean; error: Error } {
+    return { failed: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+    console.error("Tab rendering error:", error, errorInfo);
   }
 
   render(): React.ReactNode {
@@ -197,7 +207,20 @@ export class TabErrorBoundary extends React.Component<{ children: React.ReactNod
       return (
         <Card>
           <p className="text-sm font-semibold text-primary">This section failed to render.</p>
-          <p className="mt-1 text-sm text-muted">The data returned was not in the expected shape. Other tabs are unaffected.</p>
+          <p className="mt-1 text-sm text-muted">
+            {this.state.error?.message
+              ? `Details: ${this.state.error.message}`
+              : "The data returned was not in the expected shape. Other tabs are unaffected."}
+          </p>
+          <div className="mt-3">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => this.setState({ failed: false, error: undefined })}
+            >
+              Try again
+            </Button>
+          </div>
         </Card>
       );
     }
@@ -392,26 +415,26 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
               <tbody>
                 <tr>
                   <td className="text-primary">CPU</td>
-                  <td className="text-muted">{config.configured.cpu} vCPU</td>
-                  <td className="text-muted">{config.effective.cpu !== null ? `${config.effective.cpu} vCPU (cgroup ${config.effective.cgroupVersion})` : "Unavailable"}</td>
+                  <td className="text-muted">{config.configured?.cpu ?? i.cpu} vCPU</td>
+                  <td className="text-muted">{config.effective?.cpu !== null && config.effective?.cpu !== undefined ? `${config.effective.cpu} vCPU (cgroup ${config.effective.cgroupVersion ?? "v2"})` : "Unavailable"}</td>
                 </tr>
                 <tr>
                   <td className="text-primary">CPU visibility</td>
-                  <td className="text-muted">{config.configured.cpu} vCPU</td>
+                  <td className="text-muted">{config.configured?.cpu ?? i.cpu} vCPU</td>
                   <td className="text-muted">
-                    {config.effective.cpuset !== null
+                    {config.effective?.cpuset !== null && config.effective?.cpuset !== undefined
                       ? `cpuset ${config.effective.cpuset} (${config.effective.cpusetCpus ?? "?"} visible) — shared set, not dedicated cores`
                       : "Unavailable"}
                   </td>
                 </tr>
                 <tr>
                   <td className="text-primary">Memory</td>
-                  <td className="text-muted">{config.configured.memory_mb} MB</td>
-                  <td className="text-muted">{config.effective.memoryMb !== null ? `${config.effective.memoryMb} MB (cgroup ${config.effective.cgroupVersion})` : "Unavailable"}</td>
+                  <td className="text-muted">{config.configured?.memory_mb ?? i.memory_mb} MB</td>
+                  <td className="text-muted">{config.effective?.memoryMb !== null && config.effective?.memoryMb !== undefined ? `${config.effective.memoryMb} MB (cgroup ${config.effective.cgroupVersion ?? "v2"})` : "Unavailable"}</td>
                 </tr>
                 <tr>
                   <td className="text-primary">Disk</td>
-                  <td className="text-muted">{config.configured.storage_gb} GB (recorded)</td>
+                  <td className="text-muted">{config.configured?.storage_gb ?? i.storage_gb} GB (recorded)</td>
                   <td className="text-muted">
                     {!config.storage
                       ? "Unavailable"
@@ -424,7 +447,7 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
                   <td className="text-primary">LXCFS views</td>
                   <td className="text-muted">Container-aware /proc + /sys</td>
                   <td className="text-muted">
-                    {config.lxcfs === null ? "Unavailable" : config.lxcfs.active ? "Active in guest" : "Not mounted in guest"}
+                    {!config.lxcfs ? "Unavailable" : config.lxcfs.active ? "Active in guest" : "Not mounted in guest"}
                   </td>
                 </tr>
               </tbody>
@@ -438,7 +461,7 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
           <p className="text-sm text-muted">Only administrators can change resource allocations. Contact your administrator if this VPS needs different specs.</p>
         ) : (
         <>
-        <p className="mb-4 text-xs text-muted">CPU and memory are enforced through cgroup limits{config ? ` (${config.effective.cgroupVersion})` : ""} and applied live when the container runs. {diskEditable ? "Disk quota is enforceable on this backend and can be changed below." : "Disk quotas are not enforceable on this backend."}</p>
+        <p className="mb-4 text-xs text-muted">CPU and memory are enforced through cgroup limits{config?.effective?.cgroupVersion ? ` (${config.effective.cgroupVersion})` : ""} and applied live when the container runs. {diskEditable ? "Disk quota is enforceable on this backend and can be changed below." : "Disk quotas are not enforceable on this backend."}</p>
         <form onSubmit={(e) => void save(e)} className="grid max-w-lg gap-4">
           <div>
             <Label htmlFor="res-cpu">CPU (vCPU, 1–32)</Label>

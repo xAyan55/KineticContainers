@@ -353,7 +353,7 @@ export function TerminalSession({
         }
       }}
       tabIndex={isActive ? 0 : -1}
-      aria-label={`${session.title} terminal`}
+      aria-label={`${session?.title ?? "Terminal"} terminal`}
     />
   );
 }

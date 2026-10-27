@@ -6,7 +6,8 @@ export function loadTerminalPreferences(): TerminalPreferences {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_PREFERENCES };
-    const parsed = JSON.parse(raw) as Partial<TerminalPreferences>;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_PREFERENCES };
     return {
       fontSize: typeof parsed.fontSize === "number" && parsed.fontSize >= 10 && parsed.fontSize <= 24 ? parsed.fontSize : DEFAULT_PREFERENCES.fontSize,
       fontFamily: typeof parsed.fontFamily === "string" && parsed.fontFamily.trim() ? parsed.fontFamily : DEFAULT_PREFERENCES.fontFamily,

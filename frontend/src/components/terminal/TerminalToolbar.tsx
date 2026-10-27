@@ -90,7 +90,7 @@ export function TerminalToolbar({
       statusBadge = (
         <span className="flex items-center gap-1.5 text-emerald-400">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]" />
-          <span>Connected ({session.cols}×{session.rows})</span>
+          <span>Connected ({session.cols ?? 80}×{session.rows ?? 24})</span>
         </span>
       );
     } else if (session.phase === "connecting" || session.phase === "reconnecting") {
@@ -186,7 +186,7 @@ export function TerminalToolbar({
               className="px-1 text-[11px] text-[#aaa] hover:text-[#F5F5F5]"
               title="Reset font size to 14px"
             >
-              {preferences.fontSize}px
+              {preferences?.fontSize ?? 14}px
             </button>
             <button
               type="button"
