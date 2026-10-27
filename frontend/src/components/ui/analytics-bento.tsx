@@ -197,7 +197,7 @@ function Segmented({ items, value, onChange, label }: { items: string[]; value: 
     if (b) setThumb({ x: b.offsetLeft, w: b.offsetWidth });
   }, [value, items]);
   return (
-    <div role="tablist" aria-label={label} className="relative inline-grid h-[30px] auto-cols-fr grid-flow-col rounded-[10px] bg-muted p-[2px]">
+    <div role="tablist" aria-label={label} className="relative inline-grid h-[30px] auto-cols-fr grid-flow-col rounded-[10px] bg-[#181818] border border-border p-[2px]">
       <div
         className="absolute bottom-[2px] top-[2px] rounded-[8px] bg-background shadow-sm ring-1 ring-border transition-[transform,width] duration-300 [transition-timing-function:cubic-bezier(.2,.9,.25,1)]"
         style={{ width: thumb.w, transform: `translateX(${thumb.x - 2}px)`, left: 2 }}
@@ -249,7 +249,7 @@ function RevenueChart({ series, caption, prefix, colors, mono, tip }: { series: 
   };
 
   return (
-    <div ref={ref} className="relative min-h-[130px] flex-1 overflow-hidden rounded-[18px] border border-border bg-muted/40 dark:bg-muted/30">
+    <div ref={ref} className="relative min-h-[130px] flex-1 overflow-hidden rounded-[18px] border border-border bg-[#0E0E0E]">
       {caption && <div className="pointer-events-none absolute left-3 top-2.5 text-[11px] tracking-[-0.01em] text-muted-foreground">{caption}</div>}
       {W > 0 && (
         <svg width={W} height={H} className="block" role="img" aria-label={`${caption ?? "Revenue"}: from ${prefix}${fmt(vals[0])} to ${prefix}${fmt(vals[vals.length - 1])}`}>
@@ -350,7 +350,7 @@ function SessionsChart({ desktop, mobile, labels, colors, tip }: { desktop: numb
   };
 
   return (
-    <div ref={ref} className="relative min-h-[140px] flex-1 overflow-hidden rounded-[18px] border border-border bg-muted/40 dark:bg-muted/30">
+    <div ref={ref} className="relative min-h-[140px] flex-1 overflow-hidden rounded-[18px] border border-border bg-[#0E0E0E]">
       {W > 0 && (
         <svg width={W} height={H} className="block" role="img" aria-label={`${labels.desktop} and ${labels.mobile} by hour`}>
           <defs>
@@ -682,7 +682,7 @@ export function AnalyticsBento({
                 type="button"
                 aria-pressed={i === period}
                 onClick={() => setPeriod(i)}
-                className="-m-2.5 rounded-[14px] p-2.5 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring"
+                className="-m-2.5 rounded-[14px] p-2.5 text-left outline-none transition-colors hover:bg-[#1A1A1A] focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div className="flex items-center gap-1.5 text-[13px] font-semibold tracking-[-0.01em]">
                   <i className={`size-1.5 rounded-full transition-colors ${i === period ? "bg-emerald-500 dark:bg-emerald-400" : "bg-muted-foreground/60"}`} />

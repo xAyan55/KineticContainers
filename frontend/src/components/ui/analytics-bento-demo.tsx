@@ -52,7 +52,7 @@ export function AnalyticsBentoDemo() {
             { id: "eng", name: "Engineering", color: "#8B3DFF", ink: "light" },
             { id: "growth", name: "Growth", color: "#FFB800", ink: "dark" },
             { id: "brand", name: "Brand", color: "#FF5A1F", ink: "dark" },
-            { id: "ops", name: "Ops", color: "color-mix(in oklab, var(--color-muted-foreground) 45%, var(--color-muted))" },
+            { id: "ops", name: "Ops", color: "#666666", ink: "light" },
           ],
           periods: [
             { label: "Weekly", total: 2197, delta: "19.6%", compare: "vs $1,340 last week" },

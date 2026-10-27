@@ -12,11 +12,8 @@ export default {
         highlight: "#505050",
         logo: "#F0F0F0",
         primary: "#F5F5F5",
-        muted: {
-          DEFAULT: "var(--muted)",
-          foreground: "var(--muted-foreground)",
-        },
-        "muted-foreground": "var(--muted-foreground)",
+        muted: "#888888",
+        "muted-foreground": "#888888",
         border: "#2A2A2A",
         skeleton: "var(--skeleton)",
         "btn-border": "var(--btn-border)",
