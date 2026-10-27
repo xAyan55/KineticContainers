@@ -12,11 +12,26 @@ export default {
         highlight: "#505050",
         logo: "#F0F0F0",
         primary: "#F5F5F5",
-        muted: "#888888",
+        muted: {
+          DEFAULT: "var(--muted)",
+          foreground: "var(--muted-foreground)",
+        },
+        "muted-foreground": "var(--muted-foreground)",
         border: "#2A2A2A",
         skeleton: "var(--skeleton)",
         "btn-border": "var(--btn-border)",
         input: "var(--input)",
+        background: "var(--background)",
+        foreground: "var(--foreground)",
+        card: {
+          DEFAULT: "var(--card)",
+          foreground: "var(--card-foreground)",
+        },
+        popover: {
+          DEFAULT: "var(--popover)",
+          foreground: "var(--popover-foreground)",
+        },
+        ring: "var(--ring)",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],

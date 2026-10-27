@@ -34,6 +34,7 @@ import {
 import { KineticTerminal } from "@/components/terminal/KineticTerminal";
 import { FilesTab } from "@/pages/InstanceFiles";
 import { VpsDetailFeatures } from "@/components/ui/vps-detail-features";
+import { VpsAnalyticsBento } from "@/components/ui/vps-analytics-bento";
 
 const LiveConsumptionCharts = React.lazy(() =>
   import("@/components/ui/live-consumption-chart").then((m) => ({ default: m.LiveConsumptionCharts }))
@@ -240,8 +241,8 @@ export function OverviewTab({ detail, onRefresh }: { detail: InstanceDetail; onR
         <InlineAlert message={detail.live.error ?? "Live host state is currently unavailable."} />
       ) : null}
 
-      {/* Hero Features Strip (features-8 cards with real VPS metrics) */}
-      <VpsDetailFeatures detail={detail} />
+      {/* VPS Live Telemetry Bento Grid */}
+      <VpsAnalyticsBento detail={detail} />
 
       <Card>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
