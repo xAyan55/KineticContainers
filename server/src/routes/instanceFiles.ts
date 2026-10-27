@@ -7,7 +7,7 @@ import { validate, validateQuery } from "../middleware/validate.js";
 import { recordAudit } from "../services/audit.js";
 import { ProviderError, type VirtualizationProvider } from "../services/virtualization/provider.js";
 import { getProviderForNode } from "../services/virtualization/providerRegistry.js";
-import { containerRootfsPath } from "../services/virtualization/localAgent.js";
+import { containerRootfsPath, ensureContainerRootfsMounted } from "../services/virtualization/localAgent.js";
 import {
   FileServiceError,
   createEntry,
@@ -93,6 +93,7 @@ function fileContext(req: Request): FileContext {
   }
   let root: string;
   try {
+    ensureContainerRootfsMounted(containerId);
     root = containerRootfsPath(containerId);
   } catch (err) {
     throw mapFsError(err, containerId);

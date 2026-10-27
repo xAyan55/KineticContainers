@@ -33,11 +33,14 @@ const QUOTA_TOOL_ALLOWLIST = new Set([
   "tune2fs",
   "findmnt",
   "mount",
+  "umount",
   "setquota",
   "repquota",
   "quotaon",
   "chattr",
   "lsattr",
+  "resize2fs",
+  "e2fsck",
 ]);
 
 export class AgentError extends Error {
@@ -365,7 +368,7 @@ export function downloadArch(arch: string = os.arch()): string {
   throw new AgentError("UNSUPPORTED_ARCH", `Host CPU architecture is not supported: ${arch}.`, 400);
 }
 
-export async function selectBackingStore(): Promise<"btrfs" | "dir"> {
+export async function selectBackingStore(): Promise<"btrfs" | "loop" | "dir"> {
   const root = lxcRoot();
   try {
     const { stdout } = await runHostTool("df", ["-T", root]);
@@ -375,7 +378,10 @@ export async function selectBackingStore(): Promise<"btrfs" | "dir"> {
       if (parts[1]?.toLowerCase() === "btrfs") return "btrfs";
     }
   } catch {
-    // fallback to dir
+    // fallback
+  }
+  if (process.platform === "linux") {
+    return "loop";
   }
   return "dir";
 }

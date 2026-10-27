@@ -39,11 +39,14 @@ const QUOTA_TOOL_ALLOWLIST = new Set([
   "tune2fs",
   "findmnt",
   "mount",
+  "umount",
   "setquota",
   "repquota",
   "quotaon",
   "chattr",
   "lsattr",
+  "resize2fs",
+  "e2fsck",
 ]);
 
 export interface RunLxcOptions {

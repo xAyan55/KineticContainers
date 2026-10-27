@@ -38,6 +38,7 @@ import { sha512Crypt } from "../crypto.js";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
+import child_process from "node:child_process";
 
 const run = runLxc;
 
@@ -100,6 +101,12 @@ export async function containerExistsOnHost(containerId: string): Promise<boolea
 async function destroyQuietly(containerId: string): Promise<void> {
   try {
     if (await containerExistsOnHost(containerId)) {
+      try {
+        const rootfs = containerRootfsPath(containerId);
+        await runQuotaTool("umount", ["-l", rootfs]).catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
       await run("lxc-destroy", ["-n", containerId, "-f"], { timeoutMs: 120000 });
     }
   } catch {
@@ -578,8 +585,8 @@ export interface EffectiveConfig {
   cpuset: string | null;
   cpusetCpus: number | null;
   cpuModel: string;
-  storageGb: null;
-  storageEnforced: false;
+  storageGb: number | null;
+  storageEnforced: boolean;
   storageNote: string;
   cgroupVersion: CgroupVersion;
 }
@@ -597,16 +604,32 @@ export async function readEffectiveConfig(containerId: string): Promise<Effectiv
     throw new ProviderError("CONFIG_READ_FAILED", "Could not read the container configuration.");
   }
   const { cpu, memoryMb, cpuset, cpusetCpus } = parseEffectiveLimits(text, version);
+  const loop = isLoopContainer(containerId);
+  let storageGb: number | null = null;
+  let storageEnforced = false;
+  let storageNote =
+    "Disk quotas are not enforced: containers use the directory backing store, which has no quota support.";
+  if (loop) {
+    const rootdev = containerRootdevPath(containerId);
+    try {
+      if (fs.existsSync(rootdev)) {
+        storageGb = Math.round((fs.statSync(rootdev).size / (1024 ** 3)) * 10) / 10;
+        storageEnforced = true;
+        storageNote = `Dedicated loop block device filesystem (${storageGb} GB).`;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
   return {
     cpu,
     memoryMb,
     cpuset,
     cpusetCpus,
     cpuModel: RESOURCE_MODEL,
-    storageGb: null,
-    storageEnforced: false,
-    storageNote:
-      "Disk quotas are not enforced: containers use the directory backing store, which has no quota support.",
+    storageGb,
+    storageEnforced,
+    storageNote,
     cgroupVersion: version,
   };
 }
@@ -782,11 +805,117 @@ export async function isLxcfsActiveForContainer(containerId: string): Promise<bo
 // never invented. btrfs subvolume quotas are enforced for real.
 // ---------------------------------------------------------------------------
 
-export type StorageBackend = "btrfs" | "ext4" | "xfs" | "zfs" | "dir" | "unknown";
+export type StorageBackend = "btrfs" | "ext4" | "xfs" | "zfs" | "loop" | "dir" | "unknown";
 
 export function containerRootfsPath(containerId: string): string {
   validateContainerId(containerId);
   return path.join(lxcRoot(), containerId, "rootfs");
+}
+
+export function containerRootdevPath(containerId: string): string {
+  validateContainerId(containerId);
+  return path.join(lxcRoot(), containerId, "rootdev");
+}
+
+/** True when the container rootfs is backed by a dedicated loop disk image. */
+export function isLoopContainer(containerId: string): boolean {
+  try {
+    validateContainerId(containerId);
+    const rootdev = containerRootdevPath(containerId);
+    if (fs.existsSync(rootdev)) return true;
+    const cfg = containerConfigPath(containerId);
+    if (fs.existsSync(cfg)) {
+      const content = fs.readFileSync(cfg, "utf8");
+      return /lxc\.rootfs\.path\s*=\s*loop:/i.test(content);
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/** Mount rootdev to rootfs on host if not currently mounted. */
+export function ensureContainerRootfsMounted(containerId: string): void {
+  try {
+    if (!isLoopContainer(containerId)) return;
+    const rootdev = containerRootdevPath(containerId);
+    const rootfs = containerRootfsPath(containerId);
+    if (!fs.existsSync(rootdev) || !fs.existsSync(rootfs)) return;
+    try {
+      const entries = fs.readdirSync(rootfs);
+      if (entries.length > 0) return;
+    } catch {
+      /* ignore */
+    }
+    try {
+      child_process.execFileSync("mount", [rootdev, rootfs], { stdio: "ignore", timeout: 15000 });
+    } catch {
+      /* best effort */
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Mount all loop containers rootdev on server startup. */
+export function mountAllLoopContainers(): void {
+  try {
+    if (process.platform !== "linux") return;
+    const root = lxcRoot();
+    if (!fs.existsSync(root)) return;
+    const entries = fs.readdirSync(root);
+    for (const entry of entries) {
+      if (entry && /^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}$/.test(entry)) {
+        ensureContainerRootfsMounted(entry);
+      }
+    }
+  } catch {
+    /* best effort */
+  }
+}
+
+/** Unmount rootfs on host if currently mounted. */
+export async function unmountContainerRootfs(containerId: string): Promise<void> {
+  try {
+    validateContainerId(containerId);
+    const rootfs = containerRootfsPath(containerId);
+    if (!fs.existsSync(rootfs)) return;
+    await runQuotaTool("umount", ["-l", rootfs]).catch(() => undefined);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Resize dedicated loop disk and its ext4 filesystem. */
+export async function resizeLoopDisk(containerId: string, sizeGb: number): Promise<number> {
+  validateContainerId(containerId);
+  if (!Number.isInteger(sizeGb) || sizeGb < 1 || sizeGb > 2000) {
+    throw new ProviderError("INVALID_RESOURCES", "Storage allocation out of range (1-2000 GB).", 400);
+  }
+  const rootdev = containerRootdevPath(containerId);
+  if (!fs.existsSync(rootdev)) {
+    throw new ProviderError("STORAGE_NOT_FOUND", "Loop disk image not found for this container.", 404);
+  }
+  const state = await readContainerState(containerId).catch(() => "UNKNOWN" as const);
+  const wasRunning = state === "RUNNING";
+  if (wasRunning) {
+    await run("lxc-stop", ["-n", containerId], { timeoutMs: 120000 });
+  }
+  try {
+    fs.truncateSync(rootdev, sizeGb * 1024 * 1024 * 1024);
+    try {
+      await runQuotaTool("e2fsck", ["-f", "-y", rootdev], { timeoutMs: 60000 });
+    } catch {
+      /* ignore non-zero e2fsck codes on corrected repairs */
+    }
+    await runQuotaTool("resize2fs", [rootdev], { timeoutMs: 60000 });
+  } finally {
+    if (wasRunning) {
+      await run("lxc-start", ["-n", containerId], { timeoutMs: 60000 });
+      await waitForState(containerId, "RUNNING", 60);
+    }
+  }
+  return sizeGb;
 }
 
 /** Parse `df -P -T <path>` output into a filesystem type. Pure and tested. */
@@ -804,6 +933,7 @@ export function parseDfFstype(output: string, targetPath: string): string | null
 
 /** Filesystem type backing a container's rootfs. */
 export async function detectStorageBackend(containerId: string): Promise<StorageBackend> {
+  if (isLoopContainer(containerId)) return "loop";
   const rootfs = containerRootfsPath(containerId);
   try {
     const { stdout } = await runHostTool("df", ["-P", "-T", rootfs], { timeoutMs: 15000 });
@@ -1224,6 +1354,24 @@ export async function getContainerStorage(containerId: string): Promise<StorageI
   const rootfs = containerRootfsPath(containerId);
   const backend = await detectStorageBackend(containerId);
   const usedGb = await getContainerDiskUsageGb(containerId);
+  if (backend === "loop") {
+    const rootdev = containerRootdevPath(containerId);
+    let quotaGb: number | null = null;
+    try {
+      if (fs.existsSync(rootdev)) {
+        quotaGb = Math.round((fs.statSync(rootdev).size / (1024 ** 3)) * 10) / 10;
+      }
+    } catch {
+      /* ignore */
+    }
+    return {
+      backend: "loop",
+      quotaSupported: true,
+      quotaGb,
+      usedGb,
+      note: `Dedicated loop block device filesystem (${quotaGb ?? "enforced"} GB).`,
+    };
+  }
   if (backend === "btrfs" && (await isBtrfsSubvolume(rootfs))) {
     const quotaGb = await readBtrfsQuotaGb(rootfs);
     if (quotaGb !== null) {
@@ -1312,14 +1460,18 @@ export async function getContainerStorage(containerId: string): Promise<StorageI
   };
 }
 
-/** Choose the backing store for a new container: btrfs subvolumes only on btrfs hosts. */
-export async function selectBackingStore(): Promise<"btrfs" | "dir"> {
+/** Choose the backing store for a new container: btrfs on btrfs hosts, loop on Linux for dedicated limited disk. */
+export async function selectBackingStore(): Promise<"btrfs" | "loop" | "dir"> {
   try {
     const { stdout } = await runHostTool("df", ["-P", "-T", lxcRoot()], { timeoutMs: 15000 });
-    return parseDfFstype(stdout, lxcRoot()) === "btrfs" ? "btrfs" : "dir";
+    if (parseDfFstype(stdout, lxcRoot()) === "btrfs") return "btrfs";
   } catch {
-    return "dir";
+    /* ignore */
   }
+  if (process.platform === "linux") {
+    return "loop";
+  }
+  return "dir";
 }
 
 // ---------------------------------------------------------------------------
@@ -1819,11 +1971,14 @@ export class LocalLxcProvider implements VirtualizationProvider {
       throw new ProviderError("CONTAINER_EXISTS", "A container with this identifier already exists on the host.", 409);
     }
     const arch = downloadArch();
-    // Backing store: btrfs subvolumes only when the host path is really
-    // btrfs — otherwise the default dir backend (quotas honestly unsupported).
+    // Backing store: btrfs on btrfs hosts, loop on Linux for dedicated limited disk.
     const backing = await selectBackingStore();
     const createArgs = ["-n", name, "-t", "download"];
-    if (backing === "btrfs") createArgs.push("-B", "btrfs");
+    if (backing === "btrfs") {
+      createArgs.push("-B", "btrfs");
+    } else if (backing === "loop") {
+      createArgs.push("-B", "loop", "--fstype", "ext4", "--fssize", `${request.storageGb}G`);
+    }
     // Narrowly privileged creation: fixed template map + host arch, no shell interpolation.
     // Image download can take minutes; allow a long timeout and surface tool output.
     try {
@@ -1845,6 +2000,9 @@ export class LocalLxcProvider implements VirtualizationProvider {
       if (state === "UNKNOWN" && !(await containerExistsOnHost(name))) {
         throw new ProviderError("CREATE_FAILED", "Container creation reported no error but the container is missing.");
       }
+      if (backing === "loop") {
+        ensureContainerRootfsMounted(name);
+      }
       // Apply and verify the requested resource limits on the real container.
       await applyResourceLimits(name, { cpu: request.cpu, memoryMb: request.memoryMb });
       // Enforce the disk quota where the backend supports it. A quota failure
@@ -1855,7 +2013,7 @@ export class LocalLxcProvider implements VirtualizationProvider {
         if (await isBtrfsSubvolume(rootfs)) {
           await enforceBtrfsQuota(rootfs, request.storageGb);
         }
-      } else {
+      } else if (backing !== "loop") {
         const backend = await detectStorageBackend(name).catch(() => "unknown" as const);
         if (backend === "ext4") {
           try {
@@ -1903,6 +2061,7 @@ export class LocalLxcProvider implements VirtualizationProvider {
     this.requireLocalNode(nodeId);
     validateContainerId(containerId);
     if (!(await containerExistsOnHost(containerId))) return;
+    await unmountContainerRootfs(containerId);
     await run("lxc-destroy", ["-n", containerId, "-f"], { timeoutMs: 120000 });
     if (await containerExistsOnHost(containerId)) {
       throw new ProviderError("DESTROY_FAILED", "Container destroy ran but the container still exists.");

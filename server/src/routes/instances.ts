@@ -21,6 +21,8 @@ import {
   repairInstance,
   RESOURCE_MODEL,
   LocalLxcProvider,
+  isLoopContainer,
+  resizeLoopDisk,
 } from "../services/virtualization/localAgent.js";
 import { checkConsoleRunnable } from "../services/virtualization/console.js";
 import { ProviderError, type ContainerMetrics } from "../services/virtualization/provider.js";
@@ -305,6 +307,8 @@ instancesRouter.patch("/:id/resources", validate(resourcesSchema), async (req, r
             return;
           }
           await enforceBtrfsQuota(rootfs, storageGb);
+        } else if (storage.backend === "loop" || isLoopContainer(row.container_id as string)) {
+          await resizeLoopDisk(row.container_id as string, storageGb);
         } else if (storage.backend === "ext4") {
           await enforceExt4Quota(
             containerRootfsPath(row.container_id as string),

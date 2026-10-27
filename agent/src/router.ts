@@ -198,7 +198,11 @@ export function createRequestHandler(config: AgentConfig) {
         const arch = downloadArch();
         const backing = await selectBackingStore();
         const createArgs = ["-n", containerId, "-t", "download"];
-        if (backing === "btrfs") createArgs.push("-B", "btrfs");
+        if (backing === "btrfs") {
+          createArgs.push("-B", "btrfs");
+        } else if (backing === "loop") {
+          createArgs.push("-B", "loop", "--fstype", "ext4", "--fssize", `${storageGb}G`);
+        }
 
         try {
           await runLxc(

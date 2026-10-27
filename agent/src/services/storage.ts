@@ -9,9 +9,21 @@ import {
 } from "./lxc.js";
 import type { ContainerStorageInfo } from "../types.js";
 
-export type StorageBackend = "btrfs" | "ext4" | "xfs" | "zfs" | "dir" | "unknown";
+export type StorageBackend = "btrfs" | "ext4" | "xfs" | "zfs" | "loop" | "dir" | "unknown";
+
+export function isLoopContainer(containerId: string): boolean {
+  try {
+    validateContainerId(containerId);
+    const rootdev = path.join("/var/lib/lxc", containerId, "rootdev");
+    if (fs.existsSync(rootdev)) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
 
 export async function detectStorageBackend(containerId: string): Promise<StorageBackend> {
+  if (isLoopContainer(containerId)) return "loop";
   const rootfs = containerRootfsPath(containerId);
   try {
     const { stdout } = await runHostTool("df", ["-T", rootfs]);

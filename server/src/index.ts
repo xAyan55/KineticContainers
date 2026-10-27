@@ -8,9 +8,11 @@ dotenv.config();
 import { createApp, ensureSeedAdmin } from "./app.js";
 import { getDb } from "./db.js";
 import { attachConsoleGateway } from "./services/virtualization/console.js";
+import { mountAllLoopContainers } from "./services/virtualization/localAgent.js";
 
 async function main(): Promise<void> {
   getDb();
+  mountAllLoopContainers();
   await ensureSeedAdmin();
   const app = createApp();
   const port = Number(process.env.PORT ?? 8080);
