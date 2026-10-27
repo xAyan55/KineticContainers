@@ -43,6 +43,7 @@ export function TerminalSession({
     container.replaceChildren();
 
     const term = new Terminal({
+      allowProposedApi: true,
       cursorBlink: preferences.cursorBlink,
       cursorStyle: preferences.cursorStyle,
       fontSize: preferences.fontSize,
@@ -80,13 +81,18 @@ export function TerminalSession({
     const fit = new FitAddon();
     const search = new SearchAddon();
     const webLinks = new WebLinksAddon();
-    const unicode11 = new Unicode11Addon();
 
     term.loadAddon(fit);
     term.loadAddon(search);
     term.loadAddon(webLinks);
-    term.loadAddon(unicode11);
-    term.unicode.activeVersion = "11";
+
+    try {
+      const unicode11 = new Unicode11Addon();
+      term.loadAddon(unicode11);
+      term.unicode.activeVersion = "11";
+    } catch (err) {
+      console.warn("Terminal Unicode11Addon could not be loaded:", err);
+    }
 
     term.open(container);
 
