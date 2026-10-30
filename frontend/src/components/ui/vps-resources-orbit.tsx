@@ -157,7 +157,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
         {/* Interactive Diagram Canvas */}
         <div className="relative w-full overflow-x-auto bg-[#0A0A0A] border-b border-[#2A2A2A]">
           <svg
-            className="w-full min-w-[640px] h-[178px] block"
+            className="w-full min-w-[320px] sm:min-w-[560px] h-[178px] block"
             viewBox="0 0 640 178"
             role="img"
             aria-label="Virtualization kernel cgroup and host confinement flow"
@@ -201,7 +201,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                 height="45"
                 rx="5"
                 fill="#141414"
-                stroke={activeSide === "host" ? "#3BF08C" : "#2A2A2A"}
+                stroke={activeSide === "host" ? "#505050" : "#2A2A2A"}
                 strokeWidth="1"
               />
               <text x="32" y="44" fontSize="8" fill="#888888" fontFamily="'JetBrains Mono', monospace">
@@ -219,13 +219,13 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                 height="45"
                 rx="5"
                 fill="#141414"
-                stroke={activeSide === "host" ? "#3BF08C" : "#2A2A2A"}
+                stroke={activeSide === "host" ? "#505050" : "#2A2A2A"}
                 strokeWidth="1"
               />
               <text x="32" y="97" fontSize="8" fill="#888888" fontFamily="'JetBrains Mono', monospace">
                 SUBSYSTEM / CGROUP
               </text>
-              <text x="32" y="112" fontSize="9.5" fontWeight="600" fill="#3BF08C" fontFamily="'JetBrains Mono', monospace">
+              <text x="32" y="112" fontSize="9.5" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
                 {cgroupVer.toUpperCase()} · LXCFS
               </text>
             </g>
@@ -235,7 +235,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
               <path
                 key={d}
                 d={d}
-                className={`kct-flow ${activeSide === "host" ? "stroke-emerald-400" : "stroke-[#2A2A2A]"} ${
+                className={`kct-flow ${activeSide === "host" ? "stroke-[#505050]" : "stroke-[#2A2A2A]"} ${
                   idx ? "kct-dash" : ""
                 }`}
               />
@@ -244,7 +244,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
             {/* Flow Packets */}
             {isRunning &&
               [L1, L2].map((d, idx) => (
-                <circle key={`lp-${idx}`} r="2.2" className="fill-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]">
+                <circle key={`lp-${idx}`} r="2.2" className="fill-[#F5F5F5] shadow-[0_0_4px_rgba(245,245,245,0.4)]">
                   <animateMotion
                     dur={`${2.2 + idx * 0.4}s`}
                     begin={`${idx * 0.4}s`}
@@ -263,7 +263,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                 height="56"
                 rx="8"
                 fill="none"
-                stroke={isRunning ? "#10B981" : "#2A2A2A"}
+                stroke={isRunning ? "#383838" : "#2A2A2A"}
                 strokeWidth="1.2"
                 className={isRunning ? "kct-presence" : undefined}
                 strokeOpacity={isRunning ? "0.4" : "0.2"}
@@ -311,7 +311,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
               <path
                 key={d}
                 d={d}
-                className={`kct-flow ${activeSide === "limits" ? "stroke-cyan-400" : "stroke-[#2A2A2A]"} ${
+                className={`kct-flow ${activeSide === "limits" ? "stroke-[#505050]" : "stroke-[#2A2A2A]"} ${
                   idx === 1 ? "kct-dash" : ""
                 }`}
               />
@@ -320,7 +320,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
             {/* Egress Packets */}
             {isRunning &&
               [R1, R2, R3].map((d, idx) => (
-                <circle key={`rp-${idx}`} r="2" className="fill-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)]">
+                <circle key={`rp-${idx}`} r="2" className="fill-[#F5F5F5] shadow-[0_0_4px_rgba(245,245,245,0.4)]">
                   <animateMotion
                     dur={`${2.4 + idx * 0.3}s`}
                     begin={`${idx * 0.35}s`}
@@ -344,7 +344,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                   height="34"
                   rx="4"
                   fill="#141414"
-                  stroke={activeSide === "limits" ? "#22D3EE" : "#2A2A2A"}
+                  stroke={activeSide === "limits" ? "#505050" : "#2A2A2A"}
                   strokeWidth="1"
                 />
                 <text x="10" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
@@ -362,7 +362,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                   height="34"
                   rx="4"
                   fill="#141414"
-                  stroke={activeSide === "limits" ? "#22D3EE" : "#2A2A2A"}
+                  stroke={activeSide === "limits" ? "#505050" : "#2A2A2A"}
                   strokeWidth="1"
                 />
                 <text x="10" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
@@ -380,7 +380,7 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                   height="34"
                   rx="4"
                   fill="#141414"
-                  stroke={activeSide === "limits" ? "#22D3EE" : "#2A2A2A"}
+                  stroke={activeSide === "limits" ? "#505050" : "#2A2A2A"}
                   strokeWidth="1"
                 />
                 <text x="10" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
@@ -398,24 +398,24 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 sm:p-5 text-xs text-[#888888]">
           <div className="space-y-1">
             <h3 className="font-semibold text-primary flex items-center gap-1.5 text-sm">
-              <Server className="h-4 w-4 text-emerald-400" />
+              <Server className="h-4 w-4 text-primary" />
               Host & Subsystem
             </h3>
             <p className="leading-relaxed">
               Bound directly to host <span className="font-mono text-primary">{hostNode}</span> under{" "}
-              <span className="font-mono text-emerald-400">{cgroupVer}</span> unified hierarchy. Host PID:{" "}
+              <span className="font-mono text-primary">{cgroupVer}</span> unified hierarchy. Host PID:{" "}
               <span className="font-mono text-primary">{hostPid}</span>.
             </p>
           </div>
 
           <div className="space-y-1">
             <h3 className="font-semibold text-primary flex items-center gap-1.5 text-sm">
-              <Shield className="h-4 w-4 text-cyan-400" />
+              <Shield className="h-4 w-4 text-primary" />
               Virtualization Layer
             </h3>
             <p className="leading-relaxed">
               LXCFS virtual filesystem is{" "}
-              <span className={lxcfsActive ? "text-emerald-400 font-semibold" : "text-amber-400 font-semibold"}>
+              <span className={lxcfsActive ? "text-primary font-semibold" : "text-primary font-semibold"}>
                 {lxcfsActive ? "Active" : "Standard proc"}
               </span>
               . Isolates <span className="font-mono text-primary">/proc/stat</span>,{" "}
@@ -487,7 +487,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
         <div>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <NetworkIcon className="size-4 text-emerald-400" />
+              <NetworkIcon className="size-4 text-primary" />
               <h2 className="text-sm font-semibold tracking-tight text-primary">
                 Network Interfaces & Bridge Hub
               </h2>
@@ -519,7 +519,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
                 <path
                   key={idx}
                   d={getPath(idx)}
-                  className={`kct-flow ${hoverTile === idx ? "stroke-emerald-400" : "stroke-[#252525]"}`}
+                  className={`kct-flow ${hoverTile === idx ? "stroke-[#505050]" : "stroke-[#252525]"}`}
                 />
               ))}
 
@@ -529,7 +529,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
                   <circle
                     key={`net-pkt-${idx}`}
                     r="2"
-                    className="fill-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.8)]"
+                    className="fill-[#F5F5F5] shadow-[0_0_4px_rgba(245,245,245,0.4)]"
                   >
                     <animateMotion
                       dur={`${1.8 + idx * 0.3}s`}
@@ -596,7 +596,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
                       height="36"
                       rx="5"
                       fill="#141414"
-                      stroke={isHovered ? "#3BF08C" : "#2A2A2A"}
+                      stroke={isHovered ? "#505050" : "#2A2A2A"}
                       strokeWidth="1"
                     />
                     <text
@@ -615,7 +615,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
                       textAnchor="middle"
                       fontSize="7"
                       fontWeight="600"
-                      fill={isHovered ? "#3BF08C" : "#F5F5F5"}
+                      fill="#F5F5F5"
                       fontFamily="'JetBrains Mono', monospace"
                     >
                       {item.val.length > 9 ? `${item.val.slice(0, 8)}…` : item.val}
@@ -628,11 +628,11 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
         </div>
 
         {/* Real interface table details */}
-        <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-[#1E1E1E]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 pt-3 border-t border-[#2A2A2A]">
           {tiles.map((t) => (
-            <div key={t.label} className="p-2 rounded bg-[#0A0A0A] border border-[#222222]">
-              <div className="text-[10px] text-muted font-mono uppercase">{t.label}</div>
-              <div className="text-xs font-mono font-medium text-primary truncate mt-0.5" title={t.detail}>
+            <div key={t.label} className="p-2.5 rounded bg-[#0A0A0A] border border-[#2A2A2A]">
+              <div className="text-[10px] text-muted font-mono uppercase tracking-wider">{t.label}</div>
+              <div className="text-[11px] font-mono font-medium text-primary break-all leading-tight mt-1 select-all" title={t.detail}>
                 {t.detail}
               </div>
             </div>
@@ -747,7 +747,7 @@ function RealTimeTelemetryScrubber({ detail, config, isRunning, uid }: Telemetry
         <div>
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <Activity className="size-4 text-cyan-400" />
+              <Activity className="size-4 text-primary" />
               <h2 className="text-sm font-semibold tracking-tight text-primary">
                 Live Telemetry Scrubber
               </h2>
@@ -765,7 +765,7 @@ function RealTimeTelemetryScrubber({ detail, config, isRunning, uid }: Telemetry
         {/* Scrubbable SVG Chart Canvas */}
         <div className="relative my-2 w-full overflow-hidden rounded-md border border-[#2A2A2A] bg-[#0A0A0A] p-2">
           <svg
-            className="w-full h-[150px] block cursor-crosshair"
+            className="w-full h-[150px] block cursor-crosshair touch-none"
             viewBox={`0 0 ${W} ${H}`}
             onPointerMove={onMove}
             onPointerLeave={() => setHoverIndex(null)}
@@ -774,8 +774,8 @@ function RealTimeTelemetryScrubber({ detail, config, isRunning, uid }: Telemetry
           >
             <defs>
               <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor="#22D3EE" stopOpacity="0.25" />
-                <stop offset="1" stopColor="#22D3EE" stopOpacity="0" />
+                <stop offset="0" stopColor="#505050" stopOpacity="0.25" />
+                <stop offset="1" stopColor="#202020" stopOpacity="0" />
               </linearGradient>
             </defs>
 
@@ -799,7 +799,7 @@ function RealTimeTelemetryScrubber({ detail, config, isRunning, uid }: Telemetry
               <path
                 d={line}
                 fill="none"
-                stroke="#22D3EE"
+                stroke="#F5F5F5"
                 strokeWidth="2"
                 strokeLinecap="round"
                 className="opacity-90"
@@ -822,7 +822,7 @@ function RealTimeTelemetryScrubber({ detail, config, isRunning, uid }: Telemetry
               cy={curPoint[1]}
               r="3.5"
               fill="#101010"
-              stroke="#3BF08C"
+              stroke="#FFFFFF"
               strokeWidth="2"
             />
 
@@ -845,14 +845,14 @@ function RealTimeTelemetryScrubber({ detail, config, isRunning, uid }: Telemetry
         </div>
 
         {/* Quick summary stats */}
-        <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-[#1E1E1E]">
-          <div className="p-2 rounded bg-[#0A0A0A] border border-[#222222]">
-            <div className="text-[10px] text-muted font-mono uppercase">Scrubbed Sample Time</div>
-            <div className="text-xs font-mono font-medium text-primary mt-0.5">{curSample.time}</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 pt-3 border-t border-[#2A2A2A]">
+          <div className="p-2.5 rounded bg-[#0A0A0A] border border-[#2A2A2A]">
+            <div className="text-[10px] text-muted font-mono uppercase tracking-wider">Scrubbed Sample Time</div>
+            <div className="text-xs font-mono font-medium text-primary mt-1">{curSample.time}</div>
           </div>
-          <div className="p-2 rounded bg-[#0A0A0A] border border-[#222222]">
-            <div className="text-[10px] text-muted font-mono uppercase">Measured Rate</div>
-            <div className="text-xs font-mono font-medium text-emerald-400 mt-0.5">
+          <div className="p-2.5 rounded bg-[#0A0A0A] border border-[#2A2A2A]">
+            <div className="text-[10px] text-muted font-mono uppercase tracking-wider">Measured Rate</div>
+            <div className="text-xs font-mono font-medium text-primary mt-1">
               {curSample.cpuRate.toFixed(1)}% of {i.cpu} vCPU
             </div>
           </div>
@@ -916,15 +916,11 @@ export function VpsResourcesOrbit({
           pointer-events: none;
           transition: border-color .3s, transform .35s cubic-bezier(.2,.8,.2,1);
         }
-        .kct-c-tl { top: -4px; left: -4px; border-top-width: 1.5px; border-left-width: 1.5px; }
-        .kct-c-tr { top: -4px; right: -4px; border-top-width: 1.5px; border-right-width: 1.5px; }
-        .kct-c-bl { bottom: -4px; left: -4px; border-bottom-width: 1.5px; border-left-width: 1.5px; }
-        .kct-c-br { bottom: -4px; right: -4px; border-bottom-width: 1.5px; border-right-width: 1.5px; }
-        .kct-frame-hover:hover > .kct-c { border-color: #F5F5F5; }
-        .kct-frame-hover:hover > .kct-c-tl { transform: translate(-2px, -2px); }
-        .kct-frame-hover:hover > .kct-c-tr { transform: translate(2px, -2px); }
-        .kct-frame-hover:hover > .kct-c-bl { transform: translate(-2px, 2px); }
-        .kct-frame-hover:hover > .kct-c-br { transform: translate(2px, 2px); }
+        .kct-c-tl { top: 0px; left: 0px; border-top-width: 1.5px; border-left-width: 1.5px; border-top-left-radius: 6px; }
+        .kct-c-tr { top: 0px; right: 0px; border-top-width: 1.5px; border-right-width: 1.5px; border-top-right-radius: 6px; }
+        .kct-c-bl { bottom: 0px; left: 0px; border-bottom-width: 1.5px; border-left-width: 1.5px; border-bottom-left-radius: 6px; }
+        .kct-c-br { bottom: 0px; right: 0px; border-bottom-width: 1.5px; border-right-width: 1.5px; border-bottom-right-radius: 6px; }
+        .kct-frame-hover:hover > .kct-c { border-color: #505050; }
         .kct-flow { fill: none; stroke-width: 1.4; transition: stroke .3s; }
         .kct-dash { stroke-dasharray: 3 4; animation: kct-dash 1.2s linear infinite; }
         @keyframes kct-dash { to { stroke-dashoffset: -14; } }
@@ -936,3 +932,4 @@ export function VpsResourcesOrbit({
 }
 
 export default VpsResourcesOrbit;
+

@@ -140,7 +140,7 @@ function BentoTooltip({ mono, api }: { mono: string; api: TipRef }) {
 }
 
 const Delta = ({ children, className = "" }: { children: React.ReactNode; className?: string }) => (
-  <span className={`inline-flex items-center gap-[3px] text-xs font-semibold tracking-[-0.02em] text-emerald-400 ${className}`}>
+  <span className={`inline-flex items-center gap-[3px] text-xs font-semibold tracking-[-0.02em] text-[#F5F5F5] ${className}`}>
     <ArrowUpRight className="size-3" />
     {children}
   </span>
@@ -239,7 +239,7 @@ function VpsCpuChart({
   };
 
   return (
-    <div ref={ref} className="relative min-h-[120px] flex-1 overflow-hidden rounded-md border border-[#2A2A2A] bg-[#0A0A0A]">
+    <div ref={ref} className="relative min-h-[120px] h-[120px] sm:h-auto flex-1 overflow-hidden rounded-md border border-[#2A2A2A] bg-[#0A0A0A]">
       <div className="pointer-events-none absolute left-3 top-2 text-[10px] font-mono uppercase tracking-wider text-[#777777]">
         Live CFS Rate (%)
       </div>
@@ -359,7 +359,7 @@ function VpsMemoryWaves({
   };
 
   return (
-    <div ref={ref} className="relative min-h-[120px] flex-1 overflow-hidden rounded-md border border-[#2A2A2A] bg-[#0A0A0A]">
+    <div ref={ref} className="relative min-h-[120px] h-[120px] sm:h-auto flex-1 overflow-hidden rounded-md border border-[#2A2A2A] bg-[#0A0A0A]">
       {W > 0 && (
         <svg width={W} height={H} className="block" role="img" aria-label="Memory and Cache waveform">
           <defs>
@@ -490,7 +490,7 @@ function VpsTreemap({
         return (
           <div
             key={r.name}
-            className={`absolute flex flex-col justify-between overflow-hidden rounded-md p-2.5 transition-[left,top,width,height,filter] duration-500 hover:brightness-110 ${ink}`}
+            className={`absolute flex flex-col justify-between overflow-hidden rounded-md p-2.5 border border-[#2A2A2A] hover:border-[#505050] transition-[left,top,width,height,filter,border-color] duration-500 hover:brightness-110 ${ink}`}
             style={{
               left: placed ? r.x : W / 2,
               top: placed ? r.y : H / 2,
@@ -554,7 +554,7 @@ function VpsRadar({
 
   const N = values.length;
   const S = Math.min(w || 320, 320);
-  const R = S / 2 - 28;
+  const R = S / 2 - 42;
   const C = S / 2;
   const ang = (i: number) => -Math.PI / 2 + (i / N) * Math.PI * 2;
 
@@ -652,20 +652,27 @@ function VpsRadar({
                 stroke="#252525"
                 strokeWidth={1}
               />
-              <text
-                x={C + Math.cos(ang(i)) * (R + 14)}
-                y={C + Math.sin(ang(i)) * (R + 14)}
-                textAnchor="middle"
-                dominantBaseline="central"
-                fontSize={9}
-                fill="#888888"
-                style={{ fontFamily: mono }}
-              >
-                {m}
-              </text>
+              {(() => {
+                const cos = Math.cos(ang(i));
+                const anchor = cos < -0.2 ? "end" : cos > 0.2 ? "start" : "middle";
+                const xOffset = anchor === "middle" ? 0 : cos < -0.2 ? -6 : 6;
+                return (
+                  <text
+                    x={C + cos * R + xOffset}
+                    y={C + Math.sin(ang(i)) * (R + 12)}
+                    textAnchor={anchor}
+                    dominantBaseline="central"
+                    fontSize={9}
+                    fill="#888888"
+                    style={{ fontFamily: mono }}
+                  >
+                    {m}
+                  </text>
+                );
+              })()}
             </g>
           ))}
-          <path ref={line} fill="rgba(16, 185, 129, 0.12)" strokeWidth={2} strokeLinejoin="round" style={{ stroke: color }} />
+          <path ref={line} fill="rgba(245, 245, 245, 0.08)" strokeWidth={2} strokeLinejoin="round" style={{ stroke: color }} />
           <circle cx={C} cy={C} r={R * 0.2} fill="#101010" stroke="#2A2A2A" strokeWidth={1} />
           {hp && <circle cx={hp[0]} cy={hp[1]} r={4} stroke="#000000" strokeWidth={1.5} style={{ fill: color }} />}
           <rect width={S} height={S} fill="transparent" onPointerMove={move} onPointerLeave={() => { setHover(null); tip.current?.hide(); }} />
@@ -786,11 +793,11 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
     title: "Storage & Rootfs Topology",
     unit: "GB",
     groups: [
-      { id: "usr", name: "/usr Binaries", color: "#3B82F6", ink: "light" },
-      { id: "var", name: "/var Containers", color: "#10B981", ink: "dark" },
-      { id: "lib", name: "/lib Core Libs", color: "#8B5CF6", ink: "light" },
-      { id: "log", name: "/tmp & Spool", color: "#F59E0B", ink: "dark" },
-      { id: "free", name: "Free Quota", color: "#222222", ink: "light" },
+      { id: "usr", name: "/usr Binaries", color: "#3A3A3A", ink: "light" },
+      { id: "var", name: "/var Containers", color: "#2E2E2E", ink: "light" },
+      { id: "lib", name: "/lib Core Libs", color: "#242424", ink: "light" },
+      { id: "log", name: "/tmp & Spool", color: "#1B1B1B", ink: "light" },
+      { id: "free", name: "Free Quota", color: "#121212", ink: "light" },
     ],
     periods: [
       { label: "Rootfs", total: storageTotalGb, delta: `${((storageUsedGb / storageTotalGb) * 100).toFixed(1)}% used`, compare: `${storageUsedGb} GB occupied` },
@@ -856,7 +863,7 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
             <div className="shrink-0 flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 text-xs font-medium text-[#888888]">
-                  <Cpu className="size-3.5 text-emerald-400" />
+                  <Cpu className="size-3.5 text-primary" />
                   <span>CPU Utilization</span>
                 </div>
                 <div className="mt-2 text-3xl font-semibold leading-none tracking-tight sm:text-4xl" style={{ fontFamily: monoFont }}>
@@ -873,7 +880,7 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
             </div>
             <VpsCpuChart
               series={activeCpuSeries}
-              colors={["#06B6D4", "#10B981"]}
+              colors={["#505050", "#F5F5F5"]}
               mono={monoFont}
               tip={tip}
             />
@@ -886,7 +893,7 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
             <div className="shrink-0 flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 text-xs font-medium text-[#888888]">
-                  <Activity className="size-3.5 text-cyan-400" />
+                  <Activity className="size-3.5 text-primary" />
                   <span>Memory Working Set</span>
                 </div>
                 <div className="mt-2 text-3xl font-semibold leading-none tracking-tight sm:text-4xl" style={{ fontFamily: monoFont }}>
@@ -901,11 +908,11 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#888888]">
                 <span className="inline-flex items-center gap-1.5">
-                  <i className="h-1 w-3 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500" />
+                  <i className="h-1 w-3 rounded-full bg-[#F5F5F5]" />
                   RSS Memory
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  <i className="h-1 w-3 rounded-full bg-gradient-to-r from-amber-400 to-rose-500" />
+                  <i className="h-1 w-3 rounded-full bg-[#707070]" />
                   Buffers / Cache
                 </span>
               </div>
@@ -915,8 +922,8 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
               cache={memoryCache}
               labels={{ rss: "Resident Memory", cache: "Page Cache", limit: `${i.memory_mb} MB` }}
               colors={{
-                rss: ["#22D3EE", "#3B82F6"],
-                cache: ["#F59E0B", "#EF4444"],
+                rss: ["#F5F5F5", "#CCCCCC"],
+                cache: ["#707070", "#505050"],
               }}
               tip={tip}
             />
@@ -959,7 +966,7 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
                 <div className="flex items-center gap-1.5 text-xs font-medium text-[#AAAAAA]">
                   <i
                     className={`size-1.5 rounded-full ${
-                      idx === treemapPeriod ? "bg-emerald-400" : "bg-[#555555]"
+                      idx === treemapPeriod ? "bg-[#F5F5F5]" : "bg-[#555555]"
                     }`}
                   />
                   {p.label}
@@ -980,7 +987,8 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
           />
 
           {treemapData.table && (
-            <table className="mt-3 w-full border-collapse text-xs">
+            <div className="mt-3 overflow-x-auto w-full -mx-1 px-1 sm:mx-0 sm:px-0">
+            <table className="w-full min-w-[340px] border-collapse text-xs">
               <thead>
                 <tr className="border-b border-[#2A2A2A]">
                   {treemapData.table.columns.map((col, idx) => (
@@ -1008,6 +1016,7 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </section>
 
@@ -1015,7 +1024,7 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
         <section className="col-span-12 rounded-lg border border-[#2A2A2A] bg-[#101010] p-4 sm:p-5 shadow-sm lg:col-span-5">
           <div className="flex flex-col items-start justify-between gap-2.5 sm:flex-row sm:items-center">
             <div className="flex items-center gap-2">
-              <Shield className="size-4 text-emerald-400" />
+              <Shield className="size-4 text-primary" />
               <h2 className="text-sm font-semibold tracking-tight text-primary">
                 Kernel Isolation & Health Index
               </h2>
@@ -1032,7 +1041,7 @@ export function VpsAnalyticsBento({ detail, className = "" }: VpsAnalyticsBentoP
             values={currentRadar.values}
             axis={["CPU CFS", "Memory", "Disk I/O", "Network", "Namespaces", "cgroup2", "AppArmor", "Uptime"]}
             mode={currentRadar.label}
-            color="#10B981"
+            color="#F5F5F5"
             mono={monoFont}
             tip={tip}
           />
