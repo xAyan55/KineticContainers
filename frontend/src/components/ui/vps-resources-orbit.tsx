@@ -138,14 +138,14 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
   const lxcfsActive = config?.lxcfs?.active ?? false;
   const hostPid = network?.pid ?? "—";
 
-  // SVG Flow Paths
-  // Left nodes (host cluster) -> Center chip (container)
-  const L1 = "M125,50 C185,50 205,78 248,82";
-  const L2 = "M125,100 C185,100 205,82 248,88";
-  // Center chip -> Right stack (enforced bounds)
-  const R1 = "M392,80 C425,80 445,45 470,45";
-  const R2 = "M392,85 C425,85 445,85 470,85";
-  const R3 = "M392,90 C425,90 445,125 470,125";
+  // SVG Flow Paths - Balanced layout with generous box widths
+  // Left nodes (host cluster: x=15 to 135) -> Center chip (x=210 to 410)
+  const L1 = "M135,48.5 C170,48.5 180,80 210,80";
+  const L2 = "M135,102.5 C170,102.5 180,95 210,95";
+  // Center chip (x=210 to 410) -> Right stack (x=490 to 710)
+  const R1 = "M410,82 C445,82 460,36 490,36";
+  const R2 = "M410,87 C445,87 460,82 490,82";
+  const R3 = "M410,92 C445,92 460,128 490,128";
 
   const glowId = `${uid}-vflow-glow`;
   const raysId = `${uid}-vflow-rays`;
@@ -154,16 +154,16 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
     <div className="kct-frame kct-frame-hover col-span-12">
       <Brackets />
       <div className="kct-card p-0 overflow-hidden bg-[#101010] border border-[#2A2A2A] rounded-md">
-        {/* Interactive Diagram Canvas */}
+        {/* Interactive Diagram Canvas with horizontal scroll preservation on tiny mobile screens */}
         <div className="relative w-full overflow-x-auto bg-[#0A0A0A] border-b border-[#2A2A2A]">
           <svg
-            className="w-full min-w-[320px] sm:min-w-[560px] h-[178px] block"
-            viewBox="0 0 640 178"
+            className="w-full min-w-[580px] max-w-[860px] mx-auto h-[178px] block"
+            viewBox="0 0 740 178"
             role="img"
             aria-label="Virtualization kernel cgroup and host confinement flow"
           >
             <defs>
-              <radialGradient id={glowId} cx="320" cy="85" r="180" gradientUnits="userSpaceOnUse">
+              <radialGradient id={glowId} cx="310" cy="88" r="220" gradientUnits="userSpaceOnUse">
                 <stop offset="0" stopColor="#1E1E1E" stopOpacity="0.8" />
                 <stop offset="1" stopColor="#0A0A0A" stopOpacity="0" />
               </radialGradient>
@@ -173,13 +173,13 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
               </linearGradient>
             </defs>
 
-            <rect x="0" y="0" width="640" height="178" fill={`url(#${glowId})`} />
+            <rect x="0" y="0" width="740" height="178" fill={`url(#${glowId})`} />
 
             {/* Subtle radial architectural rays */}
             {[-45, -25, -10, 10, 25, 45].map((angle, idx) => (
               <path
                 key={idx}
-                d={`M320,85 L${320 + Math.sin((angle * Math.PI) / 180) * 260},${85 - Math.cos((angle * Math.PI) / 180) * 260} L${320 + Math.sin(((angle + 5) * Math.PI) / 180) * 260},${85 - Math.cos(((angle + 5) * Math.PI) / 180) * 260} Z`}
+                d={`M310,88 L${310 + Math.sin((angle * Math.PI) / 180) * 300},${88 - Math.cos((angle * Math.PI) / 180) * 300} L${310 + Math.sin(((angle + 5) * Math.PI) / 180) * 300},${88 - Math.cos(((angle + 5) * Math.PI) / 180) * 300} Z`}
                 fill={`url(#${raysId})`}
                 opacity="0.35"
               />
@@ -191,41 +191,41 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
               onMouseLeave={() => setActiveSide("")}
               className="cursor-pointer"
             >
-              <rect x="15" y="15" width="125" height="135" fill="transparent" />
+              <rect x="10" y="15" width="130" height="135" fill="transparent" />
 
               {/* Host Box */}
               <rect
-                x="20"
+                x="15"
                 y="26"
-                width="105"
+                width="120"
                 height="45"
                 rx="5"
                 fill="#141414"
                 stroke={activeSide === "host" ? "#505050" : "#2A2A2A"}
                 strokeWidth="1"
               />
-              <text x="32" y="44" fontSize="8" fill="#888888" fontFamily="'JetBrains Mono', monospace">
+              <text x="25" y="44" fontSize="8" fill="#888888" fontFamily="'JetBrains Mono', monospace">
                 HOST ENVIRONMENT
               </text>
-              <text x="32" y="58" fontSize="10.5" fontWeight="600" fill="#F5F5F5" fontFamily="sans-serif">
+              <text x="25" y="58" fontSize="10.5" fontWeight="600" fill="#F5F5F5" fontFamily="sans-serif">
                 {hostNode}
               </text>
 
               {/* Isolation Features Box */}
               <rect
-                x="20"
+                x="15"
                 y="80"
-                width="105"
+                width="120"
                 height="45"
                 rx="5"
                 fill="#141414"
                 stroke={activeSide === "host" ? "#505050" : "#2A2A2A"}
                 strokeWidth="1"
               />
-              <text x="32" y="97" fontSize="8" fill="#888888" fontFamily="'JetBrains Mono', monospace">
+              <text x="25" y="97" fontSize="8" fill="#888888" fontFamily="'JetBrains Mono', monospace">
                 SUBSYSTEM / CGROUP
               </text>
-              <text x="32" y="112" fontSize="9.5" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
+              <text x="25" y="112" fontSize="9.5" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
                 {cgroupVer.toUpperCase()} · LXCFS
               </text>
             </g>
@@ -254,13 +254,13 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                 </circle>
               ))}
 
-            {/* Center Chip: Container Engine */}
-            <g transform="translate(248, 60)">
+            {/* Center Chip: Container Engine (Generous width = 200px so status & template never overflow) */}
+            <g transform="translate(210, 62)">
               <rect
                 x="-4"
                 y="-4"
-                width="148"
-                height="56"
+                width="208"
+                height="60"
                 rx="8"
                 fill="none"
                 stroke={isRunning ? "#383838" : "#2A2A2A"}
@@ -269,8 +269,8 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                 strokeOpacity={isRunning ? "0.4" : "0.2"}
               />
               <rect
-                width="140"
-                height="48"
+                width="200"
+                height="52"
                 rx="6"
                 fill="#181818"
                 stroke="#2A2A2A"
@@ -278,14 +278,14 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                 style={{ filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.6))" }}
               />
               <circle
-                cx="18"
-                cy="24"
+                cx="16"
+                cy="26"
                 r="4.5"
                 className={isRunning ? "fill-emerald-400" : "fill-neutral-500"}
               />
               <text
-                x="32"
-                y="21"
+                x="30"
+                y="22"
                 fontSize="8.5"
                 fontWeight="600"
                 letterSpacing="0.8"
@@ -295,9 +295,9 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                 {i.container_id}
               </text>
               <text
-                x="32"
-                y="35"
-                fontSize="10"
+                x="30"
+                y="37"
+                fontSize="9.5"
                 fontWeight="700"
                 fill="#F5F5F5"
                 fontFamily="sans-serif"
@@ -330,9 +330,9 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
                 </circle>
               ))}
 
-            {/* Right Stack: Enforced Limits Tiles */}
+            {/* Right Stack: Enforced Limits Tiles (Generous width = 220px to prevent text spillover) */}
             <g
-              transform="translate(470, 20)"
+              transform="translate(490, 18)"
               onMouseEnter={() => setActiveSide("limits")}
               onMouseLeave={() => setActiveSide("")}
               className="cursor-pointer"
@@ -340,54 +340,54 @@ function VirtualizationFlowCard({ detail, config, network, isRunning, uid }: Flo
               {/* Tile 1: CPU CFS */}
               <g transform="translate(0, 0)">
                 <rect
-                  width="150"
-                  height="34"
+                  width="220"
+                  height="36"
                   rx="4"
                   fill="#141414"
                   stroke={activeSide === "limits" ? "#505050" : "#2A2A2A"}
                   strokeWidth="1"
                 />
-                <text x="10" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
+                <text x="12" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
                   CFS BANDWIDTH
                 </text>
-                <text x="10" y="26" fontSize="10" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
+                <text x="12" y="27" fontSize="9.5" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
                   {config?.effective?.cpu ?? i.cpu} vCPU ({config?.effective?.cpuset ? `cpuset ${config.effective.cpuset}` : "Shared"})
                 </text>
               </g>
 
-              {/* Tile 2: Memory Bound */}
-              <g transform="translate(0, 42)">
+              {/* Tile 2: Memory Limit */}
+              <g transform="translate(0, 46)">
                 <rect
-                  width="150"
-                  height="34"
+                  width="220"
+                  height="36"
                   rx="4"
                   fill="#141414"
                   stroke={activeSide === "limits" ? "#505050" : "#2A2A2A"}
                   strokeWidth="1"
                 />
-                <text x="10" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
+                <text x="12" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
                   MEMORY BOUND
                 </text>
-                <text x="10" y="26" fontSize="10" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
+                <text x="12" y="27" fontSize="9.5" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
                   {config?.effective?.memoryMb ?? i.memory_mb} MB RAM (OOM Enforced)
                 </text>
               </g>
 
-              {/* Tile 3: Disk Quota */}
-              <g transform="translate(0, 84)">
+              {/* Tile 3: Storage Quota */}
+              <g transform="translate(0, 92)">
                 <rect
-                  width="150"
-                  height="34"
+                  width="220"
+                  height="36"
                   rx="4"
                   fill="#141414"
                   stroke={activeSide === "limits" ? "#505050" : "#2A2A2A"}
                   strokeWidth="1"
                 />
-                <text x="10" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
-                  STORAGE STORAGE
+                <text x="12" y="14" fontSize="7.5" fill="#888888" fontFamily="'JetBrains Mono', monospace">
+                  STORAGE ALLOCATION
                 </text>
-                <text x="10" y="26" fontSize="10" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
-                  {config?.storage?.quotaGb ?? i.storage_gb} GB ({config?.storage?.backend ?? "ext4/loop"})
+                <text x="12" y="27" fontSize="9.5" fontWeight="600" fill="#F5F5F5" fontFamily="'JetBrains Mono', monospace">
+                  {config?.storage?.quotaGb ?? i.storage_gb} GB ({config?.storage?.backend ?? "Loop"})
                 </text>
               </g>
             </g>
@@ -477,7 +477,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
   const getPath = (i: number) => {
     const t = tileCoords[i];
     const dir = t.x < 150 ? -1 : 1;
-    return `M${150 + dir * 20},75 H${150 + dir * 42} V${t.y} H${t.x - dir * 18}`;
+    return `M${150 + dir * 20},75 H${150 + dir * 38} V${t.y} H${t.x - dir * 27}`;
   };
 
   return (
@@ -589,10 +589,10 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
                     onMouseEnter={() => setHoverTile(idx)}
                     onMouseLeave={() => setHoverTile(null)}
                     className="cursor-pointer transition-transform"
-                    transform={`translate(${coord.x - 22}, ${coord.y - 18})`}
+                    transform={`translate(${coord.x - 27}, ${coord.y - 18})`}
                   >
                     <rect
-                      width="44"
+                      width="54"
                       height="36"
                       rx="5"
                       fill="#141414"
@@ -600,7 +600,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
                       strokeWidth="1"
                     />
                     <text
-                      x="22"
+                      x="27"
                       y="14"
                       textAnchor="middle"
                       fontSize="6.5"
@@ -610,7 +610,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
                       {item.label.split(" ")[0]}
                     </text>
                     <text
-                      x="22"
+                      x="27"
                       y="26"
                       textAnchor="middle"
                       fontSize="7"
@@ -618,7 +618,7 @@ function NetworkTopologyHub({ network, loading, isRunning }: NetworkHubProps) {
                       fill="#F5F5F5"
                       fontFamily="'JetBrains Mono', monospace"
                     >
-                      {item.val.length > 9 ? `${item.val.slice(0, 8)}…` : item.val}
+                      {item.val.length > 12 ? `${item.val.slice(0, 11)}…` : item.val}
                     </text>
                   </g>
                 );
