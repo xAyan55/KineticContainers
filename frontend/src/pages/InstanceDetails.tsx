@@ -35,6 +35,7 @@ import { KineticTerminal } from "@/components/terminal/KineticTerminal";
 import { FilesTab } from "@/pages/InstanceFiles";
 import { VpsDetailFeatures } from "@/components/ui/vps-detail-features";
 import { VpsAnalyticsBento } from "@/components/ui/vps-analytics-bento";
+import { VpsResourcesOrbit, type VpsConfigData, type VpsNetworkData } from "@/components/ui/vps-resources-orbit";
 
 const LiveConsumptionCharts = React.lazy(() =>
   import("@/components/ui/live-consumption-chart").then((m) => ({ default: m.LiveConsumptionCharts }))
@@ -302,28 +303,9 @@ export function ConsoleTab({
 
 export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceDetail; onRefresh: () => void; isAdmin: boolean }) {
   const i = detail.instance;
-  const [config, setConfig] = React.useState<null | {
-    configured: { cpu: number; memory_mb: number; storage_gb: number };
-    effective: {
-      cpu: number | null;
-      memoryMb: number | null;
-      cpuset: string | null;
-      cpusetCpus: number | null;
-      cpuModel: string;
-      storageGb: null;
-      storageEnforced: false;
-      storageNote: string;
-      cgroupVersion: string;
-    };
-    storage: {
-      backend: string;
-      quotaSupported: boolean;
-      quotaGb: number | null;
-      usedGb: number | null;
-      note: string;
-    } | null;
-    lxcfs: { active: boolean } | null;
-  }>(null);
+  const [config, setConfig] = React.useState<VpsConfigData | null>(null);
+  const [network, setNetwork] = React.useState<VpsNetworkData | null>(null);
+  const [networkLoading, setNetworkLoading] = React.useState(true);
   const [error, setError] = React.useState<string | undefined>();
   const [cpu, setCpu] = React.useState(String(i.cpu));
   const [memoryMb, setMemoryMb] = React.useState(String(i.memory_mb));
@@ -334,28 +316,7 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
 
   const loadConfig = React.useCallback(async () => {
     try {
-      const data = await api.get<{
-        configured: { cpu: number; memory_mb: number; storage_gb: number };
-        effective: {
-          cpu: number | null;
-          memoryMb: number | null;
-          cpuset: string | null;
-          cpusetCpus: number | null;
-          cpuModel: string;
-          storageGb: null;
-          storageEnforced: false;
-          storageNote: string;
-          cgroupVersion: string;
-        };
-        storage: {
-          backend: string;
-          quotaSupported: boolean;
-          quotaGb: number | null;
-          usedGb: number | null;
-          note: string;
-        } | null;
-        lxcfs: { active: boolean } | null;
-      }>(`/api/instances/${i.id}/config`);
+      const data = await api.get<VpsConfigData>(`/api/instances/${i.id}/config`);
       setConfig(data);
       setError(undefined);
     } catch (err) {
@@ -363,9 +324,22 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
     }
   }, [i.id]);
 
+  const loadNetwork = React.useCallback(async () => {
+    setNetworkLoading(true);
+    try {
+      const data = await api.get<{ network: VpsNetworkData | null }>(`/api/instances/${i.id}/network`);
+      setNetwork(data.network);
+    } catch {
+      // Non-blocking for resources tab
+    } finally {
+      setNetworkLoading(false);
+    }
+  }, [i.id]);
+
   React.useEffect(() => {
     void loadConfig();
-  }, [loadConfig]);
+    void loadNetwork();
+  }, [loadConfig, loadNetwork]);
 
   const save = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -387,6 +361,7 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
       );
       setCpu(String(i.cpu));
       await loadConfig();
+      await loadNetwork();
       onRefresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not update resources.");
@@ -396,13 +371,22 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
   };
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
+      {/* Ink-Orbit Virtualization & Network Topology Live Bento */}
+      <VpsResourcesOrbit
+        detail={detail}
+        config={config}
+        network={network}
+        networkLoading={networkLoading}
+      />
+
       <InlineAlert message={error} />
       {result ? (
         <div role="status" className="rounded-md border border-border bg-raised px-3 py-2 text-sm text-primary">
           {result}
         </div>
       ) : null}
+
       <Card>
         <h2 className="mb-3 text-sm font-semibold text-primary">Configured vs enforced</h2>
         {!config ? (
@@ -456,6 +440,7 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
           </div>
         )}
       </Card>
+
       <Card>
         <h2 className="mb-1 text-sm font-semibold text-primary">Change limits</h2>
         {!isAdmin ? (
@@ -488,8 +473,33 @@ export function ResourcesTab({ detail, onRefresh, isAdmin }: { detail: InstanceD
         </>
         )}
       </Card>
+
+      <Card>
+        <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-primary">
+          <NetworkIcon className="h-4 w-4" aria-hidden="true" /> Container network
+        </h2>
+        <p className="mb-4 text-xs text-muted">Live facts from the host. Private addresses are not publicly reachable.</p>
+        {networkLoading ? (
+          <p className="text-sm text-muted" role="status">Reading network info…</p>
+        ) : !network ? (
+          <p className="text-sm text-muted">Network interface information is currently unavailable.</p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Fact label="State" value={network.state ?? "UNKNOWN"} />
+            <Fact label="Bridge" value={network.bridge ?? "Unavailable"} mono />
+            <Fact label="IPv4" value={(network.ipv4 ?? []).length > 0 ? (network.ipv4 ?? []).join(", ") : "None reported"} mono />
+            <Fact label="IPv6" value={(network.ipv6 ?? []).length > 0 ? (network.ipv6 ?? []).join(", ") : "None reported"} mono />
+            <Fact label="Interfaces" value={(network.links ?? []).length > 0 ? (network.links ?? []).join(", ") : "Unavailable"} mono />
+            <Fact label="Host PID" value={network.pid !== null && network.pid !== undefined ? String(network.pid) : "—"} />
+          </div>
+        )}
+        {!networkLoading && network && (network.ipv4 ?? []).length === 0 && (network.ipv6 ?? []).length === 0 ? (
+          <p className="mt-3 text-xs text-muted">No address reported — the container is likely stopped, or DHCP on the bridge has not assigned one yet.</p>
+        ) : null}
+      </Card>
+
       {isAdmin ? (
-        <RepairCard instanceId={i.id} onRepaired={() => { void loadConfig(); onRefresh(); }} />
+        <RepairCard instanceId={i.id} onRepaired={() => { void loadConfig(); void loadNetwork(); onRefresh(); }} />
       ) : null}
     </div>
   );
@@ -605,71 +615,7 @@ export function RepairCard({ instanceId, onRepaired }: { instanceId: string; onR
 }
 
 export function NetworkTab({ detail }: { detail: InstanceDetail }) {
-  const [network, setNetwork] = React.useState<null | {
-    state: string;
-    pid: number | null;
-    ipv4: string[];
-    ipv6: string[];
-    links: string[];
-    bridge: string | null;
-  }>(null);
-  const [error, setError] = React.useState<string | undefined>();
-  const [loading, setLoading] = React.useState(true);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    api
-      .get<{
-        network: {
-          state: string;
-          pid: number | null;
-          ipv4: string[];
-          ipv6: string[];
-          links: string[];
-          bridge: string | null;
-        } | null;
-      }>(`/api/instances/${detail.instance.id}/network`)
-      .then((d) => {
-        if (!cancelled) {
-          setNetwork(d.network);
-          setLoading(false);
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(err instanceof ApiError ? err.message : "Unable to load network info.");
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [detail.instance.id]);
-
-  return (
-    <Card>
-      <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-primary">
-        <NetworkIcon className="h-4 w-4" aria-hidden="true" /> Container network
-      </h2>
-      <p className="mb-4 text-xs text-muted">Live facts from the host. Private addresses are not publicly reachable.</p>
-      <InlineAlert message={error} />
-      {loading ? (
-        <p className="text-sm text-muted" role="status">Reading network info…</p>
-      ) : !network ? null : (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <Fact label="State" value={network.state ?? "UNKNOWN"} />
-          <Fact label="Bridge" value={network.bridge ?? "Unavailable"} mono />
-          <Fact label="IPv4" value={(network.ipv4 ?? []).length > 0 ? (network.ipv4 ?? []).join(", ") : "None reported"} mono />
-          <Fact label="IPv6" value={(network.ipv6 ?? []).length > 0 ? (network.ipv6 ?? []).join(", ") : "None reported"} mono />
-          <Fact label="Interfaces" value={(network.links ?? []).length > 0 ? (network.links ?? []).join(", ") : "Unavailable"} mono />
-          <Fact label="Host PID" value={network.pid !== null && network.pid !== undefined ? String(network.pid) : "—"} />
-        </div>
-      )}
-      {!loading && network && (network.ipv4 ?? []).length === 0 && (network.ipv6 ?? []).length === 0 ? (
-        <p className="mt-3 text-xs text-muted">No address reported — the container is likely stopped, or DHCP on the bridge has not assigned one yet.</p>
-      ) : null}
-    </Card>
-  );
+  return <ResourcesTab detail={detail} onRefresh={() => {}} isAdmin={false} />;
 }
 
 const TEMPLATE_NAMES: Record<string, string> = {
@@ -1225,14 +1171,13 @@ export function NotesTab({
   );
 }
 
-export type TabId = "overview" | "notes" | "console" | "resources" | "network" | "files" | "settings";
+export type TabId = "overview" | "notes" | "console" | "resources" | "files" | "settings";
 
 export const TABS: { id: TabId; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "notes", label: "Notes" },
   { id: "console", label: "Console" },
   { id: "resources", label: "Resources" },
-  { id: "network", label: "Network" },
   { id: "files", label: "Files" },
   { id: "settings", label: "Settings" },
 ];
@@ -1242,7 +1187,8 @@ export function InstanceDetailsPage(): React.JSX.Element {
   const navigate = useNavigate();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
-  const tab: TabId = TABS.some((t) => t.id === tabId) ? (tabId as TabId) : "overview";
+  const normalizedTab = tabId === "network" ? "resources" : tabId;
+  const tab: TabId = TABS.some((t) => t.id === normalizedTab) ? (normalizedTab as TabId) : "overview";
   const { detail, error, loading, load } = useInstance(id);
 
   const refresh = React.useCallback(() => {
@@ -1315,7 +1261,6 @@ export function InstanceDetailsPage(): React.JSX.Element {
               />
             )}
             {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
-            {tab === "network" && <NetworkTab detail={detail} />}
             {tab === "files" && <FilesTab instanceId={detail.instance.id} />}
             {tab === "settings" && <SettingsTab detail={detail} onRefresh={refresh} isAdmin={isAdmin} />}
             </TabErrorBoundary>

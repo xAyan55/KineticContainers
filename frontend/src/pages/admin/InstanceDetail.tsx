@@ -138,7 +138,8 @@ function TransferCard({
 export function AdminInstanceDetailPage(): React.JSX.Element {
   const { id, tabId } = useParams<{ id: string; tabId?: string }>();
   const navigate = useNavigate();
-  const tab: TabId = TABS.some((t) => t.id === tabId) ? (tabId as TabId) : "overview";
+  const normalizedTab = tabId === "network" ? "resources" : tabId;
+  const tab: TabId = TABS.some((t) => t.id === normalizedTab) ? (normalizedTab as TabId) : "overview";
 
   const [data, setData] = React.useState<AdminInstanceDetail | null>(null);
   const [error, setError] = React.useState<string | undefined>();
@@ -294,7 +295,6 @@ export function AdminInstanceDetailPage(): React.JSX.Element {
                 />
               )}
               {tab === "resources" && <ResourcesTab detail={detail} onRefresh={refresh} isAdmin />}
-              {tab === "network" && <NetworkTab detail={detail} />}
               {tab === "files" && <FilesTab instanceId={detail.instance.id} />}
               {tab === "settings" && (
                 <SettingsTab
